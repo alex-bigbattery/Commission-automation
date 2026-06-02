@@ -1,0 +1,76 @@
+============================================================
+  BIG BATTERY - SISTEMA DE COMISIONES
+  Guia rapida para Contabilidad
+============================================================
+
+QUE HACE ESTE SISTEMA
+---------------------
+Calcula las comisiones del mes basandose en datos de Zoho
+Books y genera el reporte estilo Excel que usabas antes.
+
+
+COMO USARLO (SOLO 3 PASOS)
+--------------------------
+
+  1) Doble click en:    Iniciar Comisiones.bat
+  2) Espera que se abra el navegador (10-20 segundos)
+  3) Trabaja en la pagina que aparezca
+
+Cuando termines:
+
+  4) Doble click en:    Detener Comisiones.bat
+
+Eso es todo.
+
+
+SI EL NAVEGADOR NO ABRE
+-----------------------
+Copia esta direccion en Chrome, Edge o Firefox:
+
+    http://localhost:5173
+
+
+COSAS A SABER
+-------------
+
+* La primera vez que ejecutes "Iniciar Comisiones.bat"
+  puede tardar 1-2 minutos extra instalando cosas.
+  Las siguientes veces sera mucho mas rapido.
+
+* Mientras la aplicacion esta abierta, veras dos ventanas
+  pequenas minimizadas en la barra de tareas:
+     - Big Battery - Backend API
+     - Big Battery - Frontend UI
+  NO LAS CIERRES MANUALMENTE. Usa "Detener Comisiones.bat".
+
+* Si ves un error rojo en cualquier paso, contacta al equipo
+  tecnico y mandales una captura de pantalla.
+
+
+PREGUNTAS FRECUENTES
+--------------------
+
+P: Cerre la ventana negra del .bat y ahora no puedo
+   entrar a la pagina, que hago?
+
+R: Si las dos ventanas "Big Battery - Backend API" y
+   "Big Battery - Frontend UI" siguen abiertas, la
+   aplicacion sigue funcionando. Solo abre tu navegador
+   y ve a http://localhost:5173
+
+   Si las cerraste, vuelve a ejecutar "Iniciar Comisiones.bat".
+
+
+P: La aplicacion se ve rara o salen errores.
+
+R: Detente con "Detener Comisiones.bat", espera 5 segundos,
+   y vuelve a ejecutar "Iniciar Comisiones.bat".
+
+
+P: Quiero un acceso directo en el escritorio.
+
+R: Click derecho sobre "Iniciar Comisiones.bat" -->
+   Enviar a --> Escritorio (crear acceso directo)
+
+
+============================================================

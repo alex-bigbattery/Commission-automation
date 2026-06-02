@@ -1,0 +1,23 @@
+# Netlify config — builds the React/Vite frontend and proxies /api to Render.
+# The /api proxy keeps the frontend's relative "/api" calls working AND avoids
+# browser CORS (Netlify forwards to Render server-side).
+#
+# >>> Replace YOUR-RENDER-SERVICE with your real Render service subdomain. <<<
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+# 1) API proxy — MUST come before the SPA fallback.
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-RENDER-SERVICE.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# 2) SPA fallback (single-page app: every other path serves index.html).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
