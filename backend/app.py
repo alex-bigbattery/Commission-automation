@@ -42,7 +42,7 @@ from src.db.adjustments import (
     list_adjustments,
     upsert_adjustment,
 )
-from src.db.connection import init_database
+from src.db.connection import DB_PATH, init_database, using_postgres
 from src.db.incremental_sync import incremental_sync_plan, run_incremental_sync
 from src.db.repository import DatabaseRepository
 from src.zoho_client import ZohoApiError, ZohoAuthError, ZohoBooksClient, load_zoho_config
@@ -853,8 +853,9 @@ def db_status() -> dict:
         return {
             "status": "error",
             "detail": str(exc),
-            "database_path": str(DB_DIR / "commission_automation.sqlite"),
-            "exists": (DB_DIR / "commission_automation.sqlite").exists(),
+            "database_backend": "postgres" if using_postgres() else "sqlite",
+            "database_path": "DATABASE_URL" if using_postgres() else str(DB_PATH),
+            "exists": True if using_postgres() else DB_PATH.exists(),
             "last_sync_time": None,
             "counts": {},
             "latest_runs": [],

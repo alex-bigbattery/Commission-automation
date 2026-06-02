@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import calendar
 import json
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,7 +9,8 @@ from typing import Any
 import pandas as pd
 
 from src.commission.line_classification import classify_line_type, is_commission_candidate
-from src.db.connection import DB_PATH, get_connection, init_database
+from src.db.connection import DB_PATH, DbConnection, get_connection, init_database, using_postgres
+from src.db.db_utils import date_prefix_expr
 from src.fetch_zoho_data import (
     flatten_customer_payments,
     flatten_invoices,
@@ -74,7 +74,7 @@ def month_bounds(year: int, month: int) -> tuple[str, str]:
     return f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last_day:02d}"
 
 
-def _rows_to_dataframe(rows: list[sqlite3.Row]) -> pd.DataFrame:
+def _rows_to_dataframe(rows: list[Any]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame([dict(row) for row in rows])
@@ -102,18 +102,24 @@ def _enrich_line_dataframe(lines: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _month_date_filter(column: str, conn: DbConnection) -> str:
+    prefix = date_prefix_expr(column, conn.postgres)
+    return f"{prefix} >= ? AND {prefix} <= ?"
+
+
 def load_sales_orders_table(
-    conn: sqlite3.Connection, year: int, month: int
+    conn: DbConnection, year: int, month: int
 ) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("order_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT salesorder_id, salesorder_number, order_date, reference_number,
                status, customer_id, customer_name, salesperson_name,
                shipping_charge, delivery_method, sub_total, total,
                last_modified_time, synced_at
         FROM sales_orders
-        WHERE substr(order_date, 1, 10) >= ? AND substr(order_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY order_date, salesorder_number
         """,
         (start, end),
@@ -122,17 +128,18 @@ def load_sales_orders_table(
 
 
 def load_sales_order_lines_table(
-    conn: sqlite3.Connection, year: int, month: int
+    conn: DbConnection, year: int, month: int
 ) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("so.order_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT l.salesorder_id, l.line_index, l.line_item_id, l.sku, l.item_name,
                l.quantity, l.rate, l.discount, l.item_total, l.synced_at,
                so.salesorder_number, so.order_date, so.customer_name, so.salesperson_name
         FROM sales_order_lines l
         INNER JOIN sales_orders so ON so.salesorder_id = l.salesorder_id
-        WHERE substr(so.order_date, 1, 10) >= ? AND substr(so.order_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY so.order_date, l.salesorder_id, l.line_index
         """,
         (start, end),
@@ -140,15 +147,16 @@ def load_sales_order_lines_table(
     return _enrich_line_dataframe(_rows_to_dataframe(rows))
 
 
-def load_invoices_table(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_invoices_table(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("invoice_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT invoice_id, invoice_number, invoice_date, reference_number,
                salesorder_number, status, balance, customer_name, salesperson_name,
                due_date, last_modified_time, synced_at
         FROM invoices
-        WHERE substr(invoice_date, 1, 10) >= ? AND substr(invoice_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY invoice_date, invoice_number
         """,
         (start, end),
@@ -156,17 +164,18 @@ def load_invoices_table(conn: sqlite3.Connection, year: int, month: int) -> pd.D
     return _rows_to_dataframe(rows)
 
 
-def load_invoice_lines_table(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_invoice_lines_table(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("i.invoice_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT l.invoice_id, l.line_index, l.line_item_id, l.sku, l.item_name,
                l.quantity, l.rate, l.item_total, l.synced_at,
                i.invoice_number, i.invoice_date, i.customer_name, i.salesperson_name,
                i.salesorder_number
         FROM invoice_lines l
         INNER JOIN invoices i ON i.invoice_id = l.invoice_id
-        WHERE substr(i.invoice_date, 1, 10) >= ? AND substr(i.invoice_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY i.invoice_date, l.invoice_id, l.line_index
         """,
         (start, end),
@@ -174,7 +183,7 @@ def load_invoice_lines_table(conn: sqlite3.Connection, year: int, month: int) ->
     return _enrich_line_dataframe(_rows_to_dataframe(rows))
 
 
-def load_items_table(conn: sqlite3.Connection) -> pd.DataFrame:
+def load_items_table(conn: DbConnection) -> pd.DataFrame:
     rows = conn.execute(
         """
         SELECT item_id, sku, name, status, rate, purchase_rate, unit,
@@ -187,16 +196,17 @@ def load_items_table(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def load_customer_payments_table(
-    conn: sqlite3.Connection, year: int, month: int
+    conn: DbConnection, year: int, month: int
 ) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("payment_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT payment_id, payment_number, payment_date, customer_name,
                payment_mode, amount, unused_amount, reference_number,
                last_modified_time, synced_at
         FROM customer_payments
-        WHERE substr(payment_date, 1, 10) >= ? AND substr(payment_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY payment_date, payment_number
         """,
         (start, end),
@@ -205,17 +215,18 @@ def load_customer_payments_table(
 
 
 def load_customer_payment_invoices_table(
-    conn: sqlite3.Connection, year: int, month: int
+    conn: DbConnection, year: int, month: int
 ) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("cp.payment_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT cpi.payment_id, cpi.invoice_id, cpi.invoice_number,
                cpi.amount_applied, cpi.synced_at,
                cp.payment_number, cp.payment_date, cp.customer_name
         FROM customer_payment_invoices cpi
         INNER JOIN customer_payments cp ON cp.payment_id = cpi.payment_id
-        WHERE substr(cp.payment_date, 1, 10) >= ? AND substr(cp.payment_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY cp.payment_date, cpi.payment_id, cpi.invoice_number
         """,
         (start, end),
@@ -268,14 +279,15 @@ def line_type_counts(data: CommissionInputDataFrames) -> dict[str, int]:
     return counts
 
 
-def _load_sales_order_records(conn: sqlite3.Connection, year: int, month: int) -> list[dict[str, Any]]:
+def _load_sales_order_records(conn: DbConnection, year: int, month: int) -> list[dict[str, Any]]:
     start, end = month_bounds(year, month)
     records: list[dict[str, Any]] = []
+    date_filter = _month_date_filter("order_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT salesorder_id, raw_json
         FROM sales_orders
-        WHERE substr(order_date, 1, 10) >= ? AND substr(order_date, 1, 10) <= ?
+        WHERE {date_filter}
         """,
         (start, end),
     ).fetchall()
@@ -296,14 +308,15 @@ def _load_sales_order_records(conn: sqlite3.Connection, year: int, month: int) -
     return records
 
 
-def _load_invoice_records(conn: sqlite3.Connection, year: int, month: int) -> list[dict[str, Any]]:
+def _load_invoice_records(conn: DbConnection, year: int, month: int) -> list[dict[str, Any]]:
     start, end = month_bounds(year, month)
     records: list[dict[str, Any]] = []
+    date_filter = _month_date_filter("invoice_date", conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT invoice_id, raw_json
         FROM invoices
-        WHERE substr(invoice_date, 1, 10) >= ? AND substr(invoice_date, 1, 10) <= ?
+        WHERE {date_filter}
         """,
         (start, end),
     ).fetchall()
@@ -324,16 +337,17 @@ def _load_invoice_records(conn: sqlite3.Connection, year: int, month: int) -> li
     return records
 
 
-def _load_shipment_records(conn: sqlite3.Connection, year: int, month: int) -> list[dict[str, Any]]:
+def _load_shipment_records(conn: DbConnection, year: int, month: int) -> list[dict[str, Any]]:
     """Rebuild header-shaped shipment dicts (with line_items) from line-level SQLite rows."""
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("shipment_date", conn)
     shipment_rows = conn.execute(
-        """
+        f"""
         SELECT shipment_key, shipment_id, shipment_number, shipment_date, status,
                carrier_name, tracking_number, shipping_charge, salesorder_id,
                salesorder_number, customer_name, sku, quantity, source_endpoint, raw_json
         FROM shipments
-        WHERE substr(shipment_date, 1, 10) >= ? AND substr(shipment_date, 1, 10) <= ?
+        WHERE {date_filter}
         ORDER BY shipment_key
         """,
         (start, end),
@@ -377,7 +391,7 @@ def _load_shipment_records(conn: sqlite3.Connection, year: int, month: int) -> l
     return records
 
 
-def load_sales_orders(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_sales_orders(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     records = _load_sales_order_records(conn, year, month)
     frame = flatten_sales_orders(records)
     if frame.empty:
@@ -387,7 +401,7 @@ def load_sales_orders(conn: sqlite3.Connection, year: int, month: int) -> pd.Dat
     return frame
 
 
-def load_invoices(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_invoices(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     records = _load_invoice_records(conn, year, month)
     frame = flatten_invoices(records)
     if frame.empty:
@@ -402,7 +416,7 @@ def load_invoices(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFra
     return frame
 
 
-def load_shipments(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_shipments(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     records = _load_shipment_records(conn, year, month)
     frame = flatten_shipments(records)
     if frame.empty:
@@ -422,7 +436,7 @@ def load_shipments(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFr
     return frame
 
 
-def load_items(conn: sqlite3.Connection) -> pd.DataFrame:
+def load_items(conn: DbConnection) -> pd.DataFrame:
     from src.fetch_zoho_data import flatten_items
 
     records = [
@@ -432,15 +446,16 @@ def load_items(conn: sqlite3.Connection) -> pd.DataFrame:
     return flatten_items(records)
 
 
-def load_payments(conn: sqlite3.Connection, year: int, month: int) -> pd.DataFrame:
+def load_payments(conn: DbConnection, year: int, month: int) -> pd.DataFrame:
     start, end = month_bounds(year, month)
+    date_filter = _month_date_filter("payment_date", conn)
     records = [
         json.loads(row["raw_json"])
         for row in conn.execute(
-            """
+            f"""
             SELECT raw_json
             FROM customer_payments
-            WHERE substr(payment_date, 1, 10) >= ? AND substr(payment_date, 1, 10) <= ?
+            WHERE {date_filter}
             """,
             (start, end),
         ).fetchall()
@@ -543,8 +558,9 @@ def database_status(db_path: Path | None = None) -> dict[str, Any]:
             """
         ).fetchall()
         return {
-            "database_path": str(path),
-            "exists": path.exists(),
+            "database_backend": "postgres" if using_postgres() else "sqlite",
+            "database_path": str(path) if not using_postgres() else "DATABASE_URL",
+            "exists": True if using_postgres() else path.exists(),
             "last_sync_time": last["finished_at"] if last else None,
             "last_sync_status": last["status"] if last else None,
             "counts": counts,

@@ -476,7 +476,10 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
         ("Pending", "pending"), ("Suggested Action", "__action"),
         ("Salesperson", "salesperson"), ("Sales Team", "sales_team"),
         ("Sales Order", "sales_order"), ("Invoice", "invoice"), ("SKU", "sku"),
-        ("Qty", "quantity"), ("Revenue", "revenue"),
+        ("Qty Ordered", "qty_ordered"), ("Qty Shipped", "qty_shipped"),
+        ("Qty Invoiced", "qty_invoiced"), ("Qty Returned", "qty_returned"),
+        ("Qty Commissionable", "qty_commissionable"), ("Return Status", "return_status"),
+        ("Revenue", "revenue"),
         ("System Commissionable", "system_commissionable"), ("System Rate", "system_rate"),
         ("System Amount", "system_commission"),
         ("Final Commissionable", "final_commissionable"), ("Final Rate", "final_rate"),
@@ -487,6 +490,10 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
 
     def suggested_action(row: dict) -> str:
         flags = str(row.get("flags") or "")
+        if "FULLY_RETURNED" in flags:
+            return "Returned in full — commission $0 (verify)"
+        if "PARTIALLY_RETURNED" in flags:
+            return "Partial return — commission on kept qty"
         if row.get("pending"):
             return "Assign salesperson / classify (Company or Executive)"
         if row.get("excluded"):

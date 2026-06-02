@@ -2,7 +2,8 @@
 # The /api proxy keeps the frontend's relative "/api" calls working AND avoids
 # browser CORS (Netlify forwards to Render server-side).
 #
-# >>> Replace YOUR-RENDER-SERVICE with your real Render service subdomain. <<<
+# Before deploy: replace YOUR-RENDER-SERVICE with your Render web service name
+# (e.g. commission-backend -> https://commission-backend.onrender.com).
 
 [build]
   base = "frontend"

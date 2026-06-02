@@ -7,7 +7,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from src.db.connection import DB_PATH, init_database
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+except ImportError:
+    pass
+
+from src.db.connection import DB_PATH, database_label, init_database, using_postgres
 from src.db.repository import DatabaseRepository
 
 TABLES = (
@@ -28,7 +35,7 @@ def _print_sample_lines(conn, table: str, parent_col: str, limit: int = 5) -> No
         f"""
         SELECT {parent_col}, line_index, line_item_id, sku, item_name, quantity
         FROM {table}
-        ORDER BY rowid
+        ORDER BY {parent_col}, line_index
         LIMIT ?
         """,
         (limit,),
@@ -46,8 +53,12 @@ def _print_sample_lines(conn, table: str, parent_col: str, limit: int = 5) -> No
 
 def main() -> None:
     init_database()
-    print(f"Database: {DB_PATH}")
-    print(f"Exists: {DB_PATH.exists()}\n")
+    if using_postgres():
+        print(f"Database: postgres (DATABASE_URL)")
+    else:
+        print(f"Database: {DB_PATH}")
+        print(f"Exists: {DB_PATH.exists()}")
+    print(f"Backend: {database_label()}\n")
 
     with DatabaseRepository() as repo:
         conn = repo.conn

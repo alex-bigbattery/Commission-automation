@@ -27,7 +27,6 @@ Business rules (see plan / comisiones_transcript.txt):
 from __future__ import annotations
 
 import calendar
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -41,8 +40,9 @@ from src.commission.workbook_builder_v2 import (
     DetailRow,
     SalespersonData,
 )
-from src.db.connection import get_connection, init_database
+from src.db.connection import DbConnection, get_connection, init_database
 from src.db.adjustments import get_adjustment_map, make_line_uid
+from src.db.db_utils import date_prefix_expr
 
 
 # --- Salesperson catalog -----------------------------------------------------
@@ -277,9 +277,14 @@ class InvoiceLineRecord:
     carrier: str = ""           # shipment carrier (when shipments are synced)
     ship_charge: float = 0.0    # shipment shipping charge (when shipments are synced)
     has_shipment: bool = False  # True when a shipment record was found for the SO
+    # Quantities from the matching Sales Order line (raw_json). Returns reduce commission.
+    qty_ordered: float = 0.0
+    qty_shipped: float = 0.0
+    qty_invoiced: float = 0.0
+    qty_returned: float = 0.0
 
 
-def _load_item_map(conn: sqlite3.Connection) -> dict[str, float]:
+def _load_item_map(conn: DbConnection) -> dict[str, float]:
     """sku -> MAP unit price (items.rate). SKU upper-cased for matching."""
     out: dict[str, float] = {}
     for row in conn.execute("SELECT sku, rate FROM items WHERE sku IS NOT NULL AND sku != ''").fetchall():
@@ -289,16 +294,17 @@ def _load_item_map(conn: sqlite3.Connection) -> dict[str, float]:
     return out
 
 
-def _load_invoice_meta_map(conn: sqlite3.Connection, year: int, month: int) -> dict[str, dict[str, str]]:
+def _load_invoice_meta_map(conn: DbConnection, year: int, month: int) -> dict[str, dict[str, str]]:
     """invoice_id -> {sales_team, payment_terms} parsed from invoices.raw_json for the month."""
     import json as _json
 
     start, end = month_bounds(year, month)
+    inv_date = date_prefix_expr("invoice_date", conn.postgres)
     out: dict[str, dict[str, str]] = {}
     rows = conn.execute(
-        """
+        f"""
         SELECT invoice_id, raw_json FROM invoices
-        WHERE substr(invoice_date, 1, 10) >= ? AND substr(invoice_date, 1, 10) <= ?
+        WHERE {inv_date} >= ? AND {inv_date} <= ?
         """,
         (start, end),
     ).fetchall()
@@ -319,12 +325,48 @@ def _load_invoice_meta_map(conn: sqlite3.Connection, year: int, month: int) -> d
     return out
 
 
+def _load_returns_map(conn: DbConnection, so_ids: Iterable[str]) -> dict[tuple[str, str], dict[str, float]]:
+    """(salesorder_id, sku_upper) -> {ordered, invoiced, shipped, returned} from the SO line items.
+
+    Returned quantity is only tracked on the Sales Order line raw_json, never on
+    invoice lines, so commission must look it up here to net out returns.
+    """
+    import json as _json
+
+    ids = sorted({str(s) for s in so_ids if s})
+    out: dict[tuple[str, str], dict[str, float]] = {}
+    if not ids:
+        return out
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT salesorder_id, raw_json FROM sales_orders WHERE salesorder_id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    for r in rows:
+        try:
+            order = _json.loads(r["raw_json"])
+        except Exception:
+            continue
+        soid = str(r["salesorder_id"])
+        for li in order.get("line_items") or []:
+            sku = str(li.get("sku") or "").strip().upper()
+            if not sku:
+                continue
+            agg = out.setdefault((soid, sku), {"ordered": 0.0, "invoiced": 0.0, "shipped": 0.0, "returned": 0.0})
+            agg["ordered"] += float(li.get("quantity") or 0)
+            agg["invoiced"] += float(li.get("quantity_invoiced") or 0)
+            agg["shipped"] += float(li.get("quantity_shipped") or 0)
+            agg["returned"] += float(li.get("quantity_returned") or 0)
+    return out
+
+
 def _load_invoice_lines_with_context(
-    conn: sqlite3.Connection, year: int, month: int
+    conn: DbConnection, year: int, month: int
 ) -> list[InvoiceLineRecord]:
     start, end = month_bounds(year, month)
+    inv_date = date_prefix_expr("i.invoice_date", conn.postgres)
     rows = conn.execute(
-        """
+        f"""
         SELECT
           il.invoice_id, il.line_index, il.sku, il.item_name,
           il.quantity, il.rate, il.item_total,
@@ -336,7 +378,7 @@ def _load_invoice_lines_with_context(
         FROM invoice_lines il
         INNER JOIN invoices i ON i.invoice_id = il.invoice_id
         LEFT JOIN sales_orders so ON so.salesorder_number = i.salesorder_number
-        WHERE substr(i.invoice_date, 1, 10) >= ? AND substr(i.invoice_date, 1, 10) <= ?
+        WHERE {inv_date} >= ? AND {inv_date} <= ?
         ORDER BY i.invoice_date, i.invoice_number, il.line_index
         """,
         (start, end),
@@ -346,6 +388,7 @@ def _load_invoice_lines_with_context(
     so_numbers = sorted({r["salesorder_number"] for r in rows if r["salesorder_number"]})
     shipment_info = _load_shipment_summary(conn, so_numbers)
     invoice_meta = _load_invoice_meta_map(conn, year, month)
+    returns_map = _load_returns_map(conn, {r["salesorder_id"] for r in rows if r["salesorder_id"]})
 
     records: list[InvoiceLineRecord] = []
     for r in rows:
@@ -360,6 +403,7 @@ def _load_invoice_lines_with_context(
         )
         ship = shipment_info.get(r["salesorder_number"] or "")
         meta = invoice_meta.get(str(r["invoice_id"] or ""), {})
+        qtys = returns_map.get((str(r["salesorder_id"]), sku.strip().upper()), {}) if r["salesorder_id"] else {}
         records.append(InvoiceLineRecord(
             invoice_id=str(r["invoice_id"] or ""),
             invoice_number=r["invoice_number"] or "",
@@ -387,19 +431,24 @@ def _load_invoice_lines_with_context(
             carrier=ship["carrier"] if ship else "",
             ship_charge=ship["charge"] if ship else 0.0,
             has_shipment=bool(ship),
+            qty_ordered=float(qtys.get("ordered", 0.0)),
+            qty_shipped=float(qtys.get("shipped", 0.0)),
+            qty_invoiced=float(qtys.get("invoiced", 0.0)),
+            qty_returned=float(qtys.get("returned", 0.0)),
         ))
     return records
 
 
-def _load_payment_dates(conn: sqlite3.Connection, invoice_ids: Iterable[str]) -> dict[str, date | None]:
+def _load_payment_dates(conn: DbConnection, invoice_ids: Iterable[str]) -> dict[str, date | None]:
     inv_ids = [str(i) for i in invoice_ids if i]
     if not inv_ids:
         return {}
     out: dict[str, date | None] = {iid: None for iid in inv_ids}
     placeholders = ",".join("?" * len(inv_ids))
+    pay_date = date_prefix_expr("cp.payment_date", conn.postgres)
     rows = conn.execute(
         f"""
-        SELECT cpi.invoice_id, MAX(substr(cp.payment_date, 1, 10)) AS last_date
+        SELECT cpi.invoice_id, MAX({pay_date}) AS last_date
         FROM customer_payment_invoices cpi
         INNER JOIN customer_payments cp ON cp.payment_id = cpi.payment_id
         WHERE cpi.invoice_id IN ({placeholders})
@@ -412,7 +461,7 @@ def _load_payment_dates(conn: sqlite3.Connection, invoice_ids: Iterable[str]) ->
     return out
 
 
-def _load_shipment_summary(conn: sqlite3.Connection, so_numbers: Iterable[str]) -> dict[str, dict]:
+def _load_shipment_summary(conn: DbConnection, so_numbers: Iterable[str]) -> dict[str, dict]:
     """salesorder_number -> {date, status, carrier, charge} from the shipments table.
 
     Returns an empty map when no shipments are synced (the salesperson sheets then
@@ -425,11 +474,14 @@ def _load_shipment_summary(conn: sqlite3.Connection, so_numbers: Iterable[str]) 
     out: dict[str, dict] = {}
 
     # 1) Authoritative Zoho shipments (when synced).
+    ship_date = date_prefix_expr("shipment_date", conn.postgres)
     for r in conn.execute(
         f"""
         SELECT salesorder_number,
-               MAX(substr(shipment_date, 1, 10)) AS last_ship_date,
-               status, carrier_name, shipping_charge
+               MAX({ship_date}) AS last_ship_date,
+               MAX(status) AS status,
+               MAX(carrier_name) AS carrier_name,
+               MAX(shipping_charge) AS shipping_charge
         FROM shipments
         WHERE salesorder_number IN ({placeholders})
         GROUP BY salesorder_number
@@ -447,11 +499,14 @@ def _load_shipment_summary(conn: sqlite3.Connection, so_numbers: Iterable[str]) 
     missing = [n for n in nums if n not in out]
     if missing:
         ph2 = ",".join("?" * len(missing))
+        derived_date = date_prefix_expr("shipment_date", conn.postgres)
         for r in conn.execute(
             f"""
             SELECT salesorder_number,
-                   MAX(substr(shipment_date, 1, 10)) AS last_ship_date,
-                   shipment_status, carrier_name, shipping_charge
+                   MAX({derived_date}) AS last_ship_date,
+                   MAX(shipment_status) AS shipment_status,
+                   MAX(carrier_name) AS carrier_name,
+                   MAX(shipping_charge) AS shipping_charge
             FROM derived_shipments
             WHERE salesorder_number IN ({ph2})
             GROUP BY salesorder_number
@@ -713,6 +768,8 @@ def build_salespeople_from_sqlite(
                 amount=rec.item_total,
                 reason="Missing MAP price — rate may be wrong",
             ))
+        # Discount/rate are per-unit (computed on the gross invoiced amount/qty);
+        # returns do not change which rate tier applies, only how much qty counts.
         disc = implied_discount(rec.item_total, map_price, rec.quantity)
         rt = rate_type_for(target)
         rate = commission_rate(disc, rt, tiers) if map_price > 0 else 0.0
@@ -726,9 +783,33 @@ def build_salespeople_from_sqlite(
                 amount=rec.item_total,
                 reason="Unpaid — included, confirm before payout",
             ))
+
+        # Rule — commission only on quantity kept (invoiced - returned; fall back to shipped).
+        base_qty = rec.qty_invoiced if rec.qty_invoiced > 0 else (rec.qty_shipped if rec.qty_shipped > 0 else rec.quantity)
+        comm_qty = max(0.0, base_qty - rec.qty_returned)
+        factor = (comm_qty / base_qty) if base_qty > 0 else 1.0
+        comm_amount = round(rec.item_total * factor, 2)
+        if rec.qty_returned > 0 and comm_qty <= 0:
+            flags.append("FULLY_RETURNED")
+            exceptions.append(ReviewItem(
+                salesperson=target, invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
+                reason="Returned quantity fully offsets shipped/invoiced quantity",
+            ))
+        elif rec.qty_returned > 0:
+            flags.append("PARTIALLY_RETURNED")
+            exceptions.append(ReviewItem(
+                salesperson=target, invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
+                reason=f"Partial return: {rec.qty_returned:g} of {base_qty:g} returned — commission on {comm_qty:g}",
+            ))
+
         detail = _build_detail_row(rec, map_price=map_price, comm_rate=rate, ar_status=ar)
+        # Write NET-of-returns quantity & amount so the workbook formulas stay self-consistent.
+        detail.item_total = comm_amount
+        detail.quantity = comm_qty
         lines.append(_Line(line_uid, rec, section, "commissionable", target, target,
-                           map_price, disc, rate, rec.item_total, rec.item_total * rate,
+                           map_price, disc, rate, comm_amount, comm_amount * rate,
                            detail, flags=flags, pending=not in_roster))
 
     # ---- Phase 2: apply manual adjustments (after calc, before export) ----
@@ -796,6 +877,16 @@ def build_salespeople_from_sqlite(
             "item_name": ln.rec.item_name,
             "customer": ln.rec.customer_name,
             "quantity": ln.rec.quantity,
+            "qty_ordered": ln.rec.qty_ordered,
+            "qty_shipped": ln.rec.qty_shipped,
+            "qty_invoiced": ln.rec.qty_invoiced,
+            "qty_returned": ln.rec.qty_returned,
+            "qty_commissionable": (round(ln.detail.quantity, 2) if ln.block == "commissionable" else ""),
+            "return_status": (
+                "Fully Returned" if "FULLY_RETURNED" in ln.flags
+                else "Partially Returned" if "PARTIALLY_RETURNED" in ln.flags
+                else ""
+            ),
             "revenue": round(ln.rec.item_total, 2),
             "block": ln.block,
             "section": ln.section,

@@ -50,6 +50,8 @@ function lineState(r) {
 function issueFound(r) {
   const flags = String(r.flags || "");
   const team = String(r.sales_team || "").toLowerCase();
+  if (flags.includes("FULLY_RETURNED")) return "Fully returned — not commissionable";
+  if (flags.includes("PARTIALLY_RETURNED")) return "Partially returned";
   if (r.pending && (team.includes("exe") || team.includes("comp")))
     return "Company / Executive account needs classification";
   if (r.pending) return "Missing salesperson assignment";
@@ -63,6 +65,9 @@ function issueFound(r) {
 
 function suggestedAction(r) {
   const team = String(r.sales_team || "").toLowerCase();
+  const flags = String(r.flags || "");
+  if (flags.includes("FULLY_RETURNED")) return "Returned — verify $0 commission";
+  if (flags.includes("PARTIALLY_RETURNED")) return "Partial return — verify kept qty";
   if (r.pending && (team.includes("exe") || team.includes("comp"))) return "Classify as Company / Executive";
   if (r.pending) return "Assign salesperson";
   if (String(r.flags || "").includes("MISSING_MAP")) return "Review MAP / discount";

@@ -1,8 +1,5 @@
 # Render Blueprint — FastAPI backend for the Big Battery Commission system.
-# In Render: New > Blueprint > connect this repo. Render reads this file.
-#
-# NOTE: a Persistent Disk requires a paid instance (Starter or higher). The disk
-# keeps the SQLite database (and manual adjustments) across deploys/restarts.
+# Database: Supabase Postgres via DATABASE_URL (no Render disk required).
 services:
   - type: web
     name: commission-backend
@@ -13,21 +10,17 @@ services:
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: "uvicorn backend.app:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /api/health
-
     autoDeploy: true
-    disk:
-      name: commission-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
-      # SQLite + history folder live on the persistent disk:
-      - key: DB_PATH
-        value: "/data/commission_automation.sqlite"
+      # Supabase Postgres connection string (set value in Render dashboard):
+      - key: DATABASE_URL
+        sync: false
+      # Optional: historical Excel root if mounted elsewhere
       - key: COMMISSIONS_ROOT
-        value: "/data/historical"
-      # Zoho credentials — set the VALUES in the Render dashboard (kept secret):
+        sync: false
+      # Zoho credentials — set values in the Render dashboard:
       - key: ZOHO_CLIENT_ID
         sync: false
       - key: ZOHO_CLIENT_SECRET

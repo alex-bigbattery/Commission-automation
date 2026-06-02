@@ -7,7 +7,6 @@ commission calculation, BEFORE final export. Raw Zoho tables are never touched.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .connection import get_connection, init_database
+from .connection import DbConnection, get_connection, init_database
 from .zoho_lines import extract_line_items, payment_invoice_applications, synthetic_line_item_id
 
 
@@ -27,7 +26,7 @@ def custom_field_map(record: dict[str, Any]) -> dict[str, str]:
 
 
 class DatabaseRepository:
-    def __init__(self, conn: sqlite3.Connection | None = None) -> None:
+    def __init__(self, conn: DbConnection | None = None) -> None:
         self._owns_connection = conn is None
         self.conn = conn or get_connection()
         init_database()
@@ -53,6 +52,18 @@ class DatabaseRepository:
         date_start: str | None = None,
         date_end: str | None = None,
     ) -> int:
+        if self.conn.postgres:
+            row = self.conn.execute(
+                """
+                INSERT INTO zoho_sync_runs (
+                    sync_id, started_at, status, date_start, date_end, module, records_fetched
+                ) VALUES (?, ?, 'running', ?, ?, ?, 0)
+                RETURNING id
+                """,
+                (sync_id, utc_now_iso(), date_start, date_end, module),
+            ).fetchone()
+            self.conn.commit()
+            return int(row["id"])
         cur = self.conn.execute(
             """
             INSERT INTO zoho_sync_runs (
@@ -62,7 +73,7 @@ class DatabaseRepository:
             (sync_id, utc_now_iso(), date_start, date_end, module),
         )
         self.conn.commit()
-        return int(cur.lastrowid)
+        return int(cur.lastrowid or 0)
 
     def finish_sync_run(
         self,
