@@ -10,6 +10,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from src.commission.returns import commissionable_quantity  # shared returned-qty rule
+from src.commission.b2b_reconciliation import build_reconciliation_frames, SOURCE_LABEL
 
 INPUT_DIR = BASE_DIR / "data" / "input"
 OUTPUT_DIR = BASE_DIR / "data" / "output"
@@ -2247,7 +2248,22 @@ def write_excel(
     jennifer_summary = read_jennifer_b2b_summary(B2B_WORKBOOK)
     validation = build_validation_vs_jennifer(audit, jennifer_summary)
 
+    # Authoritative "Our Commission" sourced from the single B2B payable engine
+    # (returns + adjustments already applied). Legacy sheets are kept below.
+    try:
+        _tpl = BASE_DIR / "data" / "templates" / "master_template_clean.xlsx"
+        recon_frames = build_reconciliation_frames(
+            YEAR, MONTH, template_path=_tpl, jennifer_workbook=B2B_WORKBOOK
+        )
+    except Exception as exc:  # pragma: no cover - never block the legacy audit
+        print(f"WARNING: B2B payable reconciliation skipped: {exc}")
+        recon_frames = {}
+
     with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
+        # Engine-sourced reconciliation first (source of truth), each labeled.
+        for sheet_name, frame in recon_frames.items():
+            frame.to_excel(writer, sheet_name=sheet_name, index=False, startrow=1)
+            writer.sheets[sheet_name].cell(1, 1, SOURCE_LABEL)
         audit_out.to_excel(writer, sheet_name="Commission Detail", index=False)
         line_match.to_excel(writer, sheet_name="Line Match vs Jennifer", index=False)
         shipping_detail.to_excel(writer, sheet_name="Shipping Charges", index=False)
