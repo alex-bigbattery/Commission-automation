@@ -2,14 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { KpiCard, Banner, money, num } from "./ui.jsx";
 import { IconSearch, IconDollar, IconChart, IconAlert, IconCheck, IconInfo, IconSparkle, IconX } from "./Icons.jsx";
 
-const API = "/api";
+import { API, apiFetch, readJson } from "../lib/api.js";
+
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-async function readJson(res) {
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
-  return data;
-}
 function prevMonth() {
   const d = new Date(); d.setMonth(d.getMonth() - 1);
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
@@ -116,7 +112,7 @@ export default function AdjustmentsView() {
   async function load() {
     setLoading(true); setError("");
     try {
-      const data = await readJson(await fetch(`${API}/adjustments/lines?year=${year}&month=${month}`));
+      const data = await readJson(await apiFetch(`${API}/adjustments/lines?year=${year}&month=${month}`));
       setRows(data.rows || []);
       setRoster(data.roster || []);
     } catch (err) { setError(err.message); setRows([]); }
@@ -200,7 +196,7 @@ export default function AdjustmentsView() {
     if (!editing) return;
     setConfirmSave(false); setLoading(true); setError("");
     try {
-      await readJson(await fetch(`${API}/adjustments`, {
+      await readJson(await apiFetch(`${API}/adjustments`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           period_year: year, period_month: month,
@@ -230,7 +226,7 @@ export default function AdjustmentsView() {
     if (!id) { closeDrawer(); return; }
     setLoading(true); setError("");
     try {
-      await readJson(await fetch(`${API}/adjustments/${id}`, { method: "DELETE" }));
+      await readJson(await apiFetch(`${API}/adjustments/${id}`, { method: "DELETE" }));
       setStatus("Adjustment removed.");
       closeDrawer();
       await load();
@@ -241,7 +237,7 @@ export default function AdjustmentsView() {
   async function regenerate() {
     setLoading(true); setError(""); setStatus("Regenerating the workbook with adjustments…");
     try {
-      const d = await readJson(await fetch(`${API}/commission/generate`, {
+      const d = await readJson(await apiFetch(`${API}/commission/generate`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ year, month }),
       }));

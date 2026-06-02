@@ -14,18 +14,12 @@ import {
   IconHistory,
 } from "./Icons.jsx";
 
-const API = "/api";
+import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
-
-async function readJson(res) {
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
-  return data;
-}
 
 function previousMonthPeriod() {
   // Commissions are run after the month closes, so default to the previous month.
@@ -62,12 +56,12 @@ export default function GenerateView() {
     setError("");
     try {
       const input = await readJson(
-        await fetch(`${API}/input/status?year=${year}&month=${month}`)
+        await apiFetch(`${API}/input/status?year=${year}&month=${month}`)
       );
       setPeriodReady(Boolean(input?.sqlite_period?.ready));
       setPeriodCounts(input?.sqlite_period?.counts || {});
 
-      const sum = await readJson(await fetch(`${API}/commission/summary?year=${year}&month=${month}`));
+      const sum = await readJson(await apiFetch(`${API}/commission/summary?year=${year}&month=${month}`));
       if (sum.generated) {
         setSummary(sum);
         await loadExceptions(sum.report_id);
@@ -86,7 +80,7 @@ export default function GenerateView() {
 
   async function loadExceptions() {
     const data = await readJson(
-      await fetch(`${API}/commission/exceptions?year=${year}&month=${month}`)
+      await apiFetch(`${API}/commission/exceptions?year=${year}&month=${month}`)
     );
     setExceptions({ columns: data.columns || [], rows: data.rows || [] });
   }
@@ -94,7 +88,7 @@ export default function GenerateView() {
   async function loadSheets(reportId) {
     try {
       const data = await readJson(
-        await fetch(`${API}/workbooks/${encodeURIComponent(reportId)}/sheets?source=report`)
+        await apiFetch(`${API}/workbooks/${encodeURIComponent(reportId)}/sheets?source=report`)
       );
       setSheets(data.sheets || []);
       const first = (data.sheets || [])[0] || "";
@@ -108,7 +102,7 @@ export default function GenerateView() {
   async function loadSheet(reportId, sheet) {
     try {
       const data = await readJson(
-        await fetch(
+        await apiFetch(
           `${API}/workbooks/${encodeURIComponent(reportId)}/sheets/${encodeURIComponent(sheet)}?source=report`
         )
       );
@@ -124,7 +118,7 @@ export default function GenerateView() {
     setStatus("Generating the commission workbook from SQLite…");
     try {
       const data = await readJson(
-        await fetch(`${API}/commission/generate`, {
+        await apiFetch(`${API}/commission/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ year, month }),
@@ -147,7 +141,7 @@ export default function GenerateView() {
     setStatus("Syncing latest Zoho data…");
     try {
       await readJson(
-        await fetch(`${API}/sync/incremental`, {
+        await apiFetch(`${API}/sync/incremental`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         })
@@ -162,10 +156,17 @@ export default function GenerateView() {
     }
   }
 
+  async function handleDownload() {
+    if (!summary?.report_id) return;
+    try {
+      await downloadApi(`${API}/downloads/reports/${encodeURIComponent(summary.report_id)}`, summary.report_id);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   const kpis = summary?.kpis || {};
-  const downloadHref = summary?.report_id
-    ? `${API}/downloads/reports/${encodeURIComponent(summary.report_id)}`
-    : "";
+  const canDownload = Boolean(summary?.report_id);
 
   const topReps = useMemo(() => {
     const totals = summary?.totals_by_sheet || {};
@@ -214,9 +215,9 @@ export default function GenerateView() {
             {loading ? <span className="spinner" /> : <IconSparkle />}
             {loading ? "Generating…" : "Generate Commissions"}
           </button>
-          <a className={`btn ${!downloadHref ? "disabled" : ""}`} href={downloadHref}>
+          <button type="button" className="btn" disabled={!canDownload} onClick={handleDownload}>
             <IconDownload /> Download workbook
-          </a>
+          </button>
         </div>
 
         <div className="row" style={{ marginLeft: "auto", gap: "0.5rem", flexWrap: "wrap" }}>

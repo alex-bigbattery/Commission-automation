@@ -17,6 +17,14 @@ services:
       # Supabase Postgres connection string (set value in Render dashboard):
       - key: DATABASE_URL
         sync: false
+      # Supabase Auth (JWT validation on /api/*)
+      - key: SUPABASE_URL
+        value: "https://evgmeszyxjzrrbrzznhv.supabase.co"
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # Comma-separated Netlify/custom origins for direct API access (optional)
+      - key: ALLOWED_ORIGINS
+        sync: false
       # Optional: historical Excel root if mounted elsewhere
       - key: COMMISSIONS_ROOT
         sync: false

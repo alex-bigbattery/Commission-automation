@@ -1956,6 +1956,58 @@ button {
 .confirm-title svg { width: 18px; height: 18px; }
 .confirm-box p { font-size: 13px; color: var(--bb-text-muted); margin: 0 0 0.85rem; }
 
+/* login */
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, var(--bb-bg) 0%, var(--bb-bg-elev) 100%);
+  padding: 1.5rem;
+}
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bb-bg-elev);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--r-lg);
+  padding: 1.75rem;
+  box-shadow: var(--sh-lg);
+}
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.login-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+.login-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 13px;
+  color: var(--bb-text-muted);
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+.sidebar-signout {
+  margin-bottom: 0.75rem;
+}
+.sidebar-user-email {
+  font-size: 11px;
+  word-break: break-all;
+  text-align: right;
+  max-width: 140px;
+}
+
 /* help modal */
 .help-modal {
   width: min(640px, 100%); max-height: 100%; background: var(--bb-bg-elev);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import calendar
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+from .auth_middleware import SupabaseAuthMiddleware
 
 from .commission_reader import (
     COMMISSIONS_DIR,
@@ -60,13 +63,22 @@ SYNC_SCRIPT = SRC_DIR / "db" / "sync_zoho_to_sqlite.py"
 
 app = FastAPI(title="Commission Automation API", version="1.1.0")
 
+_default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+_extra = os.environ.get("ALLOWED_ORIGINS", "")
+if _extra.strip():
+    _default_origins.extend(o.strip() for o in _extra.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_default_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SupabaseAuthMiddleware)
 
 
 class FetchRequest(BaseModel):

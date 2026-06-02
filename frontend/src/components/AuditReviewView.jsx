@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-
-const API = "/api";
+import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const MONTHS = [
   "January",
@@ -19,14 +18,6 @@ const MONTHS = [
 ];
 
 const HISTORICAL_UPLOAD = { key: "b2b", label: "Historical Commission Workbook (optional)" };
-
-async function readJson(res) {
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.detail || `Request failed (${res.status})`);
-  }
-  return data;
-}
 
 function toBase64(file) {
   return new Promise((resolve, reject) => {
@@ -122,7 +113,7 @@ export default function AuditReviewView() {
 
   async function loadDbStatus() {
     try {
-      const data = await readJson(await fetch(`${API}/db/status`));
+      const data = await readJson(await apiFetch(`${API}/db/status`));
       setDbStatus(data);
     } catch {
       setDbStatus(null);
@@ -133,7 +124,7 @@ export default function AuditReviewView() {
     setError("");
     try {
       const statusData = await readJson(
-        await fetch(`${API}/input/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`)
+        await apiFetch(`${API}/input/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`)
       );
       setInputStatus(statusData);
 
@@ -161,7 +152,7 @@ export default function AuditReviewView() {
       if (overrideReportId) query.set("report_id", overrideReportId);
 
       try {
-        const summary = await readJson(await fetch(`${API}/audit/summary?${query.toString()}`));
+        const summary = await readJson(await apiFetch(`${API}/audit/summary?${query.toString()}`));
         setStatusCards((prev) => ({ ...prev, ...(summary.cards || {}) }));
         setReportId(summary.report_id || "");
         setHasHistoricalValidation(Boolean(summary?.has_historical_workbook || statusData?.files?.b2b?.exists));
@@ -190,7 +181,7 @@ export default function AuditReviewView() {
     setStatus("Running initial historical sync…");
     try {
       const data = await readJson(
-        await fetch(`${API}/sync/full`, {
+        await apiFetch(`${API}/sync/full`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ date_start: "2021-01-01", date_end: "today" }),
@@ -213,7 +204,7 @@ export default function AuditReviewView() {
     setStatus("Syncing latest Zoho data into SQLite…");
     try {
       const data = await readJson(
-        await fetch(`${API}/sync/incremental`, {
+        await apiFetch(`${API}/sync/incremental`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         })
@@ -239,7 +230,7 @@ export default function AuditReviewView() {
     setStatus("");
     try {
       await readJson(
-        await fetch(`${API}/uploads`, {
+        await apiFetch(`${API}/uploads`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -270,7 +261,7 @@ export default function AuditReviewView() {
     setStatus("Generating commission audit from SQLite…");
     try {
       const data = await readJson(
-        await fetch(`${API}/audit/run`, {
+        await apiFetch(`${API}/audit/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ year, month }),
@@ -293,17 +284,17 @@ export default function AuditReviewView() {
     const id = forReportId || reportId;
     if (!id) return;
     const validationData = await readJson(
-      await fetch(
+      await apiFetch(
         `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Validation vs Jennifer")}?source=report`
       )
     );
     const lineMatchData = await readJson(
-      await fetch(
+      await apiFetch(
         `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Line Match vs Jennifer")}?source=report`
       )
     );
     const exceptionsData = await readJson(
-      await fetch(`${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Exceptions")}?source=report`)
+      await apiFetch(`${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Exceptions")}?source=report`)
     );
     setValidation({ columns: validationData.columns || [], rows: validationData.rows || [] });
     setLineMatch({ columns: lineMatchData.columns || [], rows: lineMatchData.rows || [] });
@@ -328,7 +319,15 @@ export default function AuditReviewView() {
     }
   }
 
-  const downloadHref = reportId ? `${API}/downloads/reports/${encodeURIComponent(reportId)}` : "";
+  async function handleDownloadReport() {
+    if (!reportId) return;
+    try {
+      await downloadApi(`${API}/downloads/reports/${encodeURIComponent(reportId)}`, reportId);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   const latestRuns = Array.isArray(dbStatus?.latest_runs) ? dbStatus.latest_runs.slice(0, 6) : [];
   const tabCounts = {
     exceptions: exceptions.rows.length,
@@ -419,9 +418,9 @@ export default function AuditReviewView() {
               >
                 Generate Commission Audit
               </button>
-              <a className={`btn ${!reportId ? "disabled" : ""}`} href={downloadHref}>
+              <button type="button" className="btn" disabled={!reportId} onClick={handleDownloadReport}>
                 Download Report
-              </a>
+              </button>
             </div>
           </div>
         </div>

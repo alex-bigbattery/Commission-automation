@@ -8,6 +8,9 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+from src.commission.returns import commissionable_quantity  # shared returned-qty rule
+
 INPUT_DIR = BASE_DIR / "data" / "input"
 OUTPUT_DIR = BASE_DIR / "data" / "output"
 
@@ -381,6 +384,8 @@ def build_sales_orders_base(source: Path | pd.DataFrame) -> pd.DataFrame:
         "Item Description": ["Item Desc", "Item Description"],
         "Quantity": ["QuantityOrdered", "Quantity Ordered", "Quantity"],
         "Quantity Invoiced": ["QuantityInvoiced", "Quantity Invoiced"],
+        "Quantity Shipped": ["QuantityShipped", "Quantity Shipped"],
+        "Quantity Returned": ["QuantityReturned", "Quantity Returned"],
         "Quantity Packed": ["QuantityPacked", "Quantity Packed"],
         "Item Price": ["Item Price"],
         "Discount": ["Discount"],
@@ -1227,7 +1232,23 @@ def build_commission_audit():
 
     audit["Include Shipping in Commission"] = "Review"
 
-    audit["Commissionable Amount"] = audit["Revenue"]
+    # Returned-quantity rule (shared helper with the B2B payable engine):
+    # commission is paid only on quantity kept (invoiced - returned).
+    qty_inv = pd.to_numeric(audit.get("Quantity Invoiced", 0), errors="coerce").fillna(0)
+    qty_ret = pd.to_numeric(audit.get("Quantity Returned", 0), errors="coerce").fillna(0)
+    qty_shp = pd.to_numeric(audit.get("Quantity Shipped", 0), errors="coerce").fillna(0)
+    qty_ord = pd.to_numeric(audit.get("Quantity", 0), errors="coerce").fillna(0)
+    _ret = [
+        commissionable_quantity(i, r, s, o)
+        for i, r, s, o in zip(qty_inv, qty_ret, qty_shp, qty_ord)
+    ]
+    audit["Qty Invoiced"] = qty_inv
+    audit["Qty Returned"] = qty_ret
+    audit["Qty Commissionable"] = [t[0] for t in _ret]
+    audit["Return Factor"] = [t[1] for t in _ret]
+    audit["Return Status"] = [t[2] for t in _ret]
+
+    audit["Commissionable Amount"] = audit["Revenue"] * audit["Return Factor"]
     audit["Commission Amount"] = audit["Commissionable Amount"] * audit["Commission Rate"]
 
     other_charge_mask = (
@@ -2177,6 +2198,10 @@ def write_excel(
         "Item Name",
         "Item Description",
         "Quantity",
+        "Qty Invoiced",
+        "Qty Returned",
+        "Qty Commissionable",
+        "Return Status",
         "Revenue",
         "MAP Price",
         "MAP Total",

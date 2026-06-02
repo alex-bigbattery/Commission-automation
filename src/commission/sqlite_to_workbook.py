@@ -35,6 +35,7 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 
 from src.commission.line_classification import classify_line_type
+from src.commission.returns import commissionable_quantity
 from src.commission.workbook_builder_v2 import (
     Block,
     DetailRow,
@@ -784,24 +785,24 @@ def build_salespeople_from_sqlite(
                 reason="Unpaid — included, confirm before payout",
             ))
 
-        # Rule — commission only on quantity kept (invoiced - returned; fall back to shipped).
-        base_qty = rec.qty_invoiced if rec.qty_invoiced > 0 else (rec.qty_shipped if rec.qty_shipped > 0 else rec.quantity)
-        comm_qty = max(0.0, base_qty - rec.qty_returned)
-        factor = (comm_qty / base_qty) if base_qty > 0 else 1.0
+        # Rule (shared with the audit engine) — commission only on quantity kept.
+        comm_qty, factor, ret_status = commissionable_quantity(
+            rec.qty_invoiced, rec.qty_returned, rec.qty_shipped, rec.quantity
+        )
         comm_amount = round(rec.item_total * factor, 2)
-        if rec.qty_returned > 0 and comm_qty <= 0:
+        if ret_status == "Fully Returned":
             flags.append("FULLY_RETURNED")
             exceptions.append(ReviewItem(
                 salesperson=target, invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
                 reason="Returned quantity fully offsets shipped/invoiced quantity",
             ))
-        elif rec.qty_returned > 0:
+        elif ret_status == "Partially Returned":
             flags.append("PARTIALLY_RETURNED")
             exceptions.append(ReviewItem(
                 salesperson=target, invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
-                reason=f"Partial return: {rec.qty_returned:g} of {base_qty:g} returned — commission on {comm_qty:g}",
+                reason=f"Partial return: {rec.qty_returned:g} returned — commission on {comm_qty:g}",
             ))
 
         detail = _build_detail_row(rec, map_price=map_price, comm_rate=rate, ar_status=ar)

@@ -1,15 +1,6 @@
 import React, { useEffect, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-
-const API = "/api";
-
-async function readJson(res) {
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.detail || `Request failed (${res.status})`);
-  }
-  return data;
-}
+import { API, apiFetch, readJson } from "../lib/api.js";
 
 export default function ReportsView() {
   const [reports, setReports] = useState([]);
@@ -22,7 +13,7 @@ export default function ReportsView() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`${API}/reports`)
+    apiFetch(`${API}/reports`)
       .then(readJson)
       .then((d) => {
         setReports(d.workbooks || []);
@@ -35,7 +26,7 @@ export default function ReportsView() {
     if (!selected) return;
     setLoading(true);
     setError("");
-    fetch(`${API}/workbooks/${encodeURIComponent(selected)}/sheets?source=report`)
+    apiFetch(`${API}/workbooks/${encodeURIComponent(selected)}/sheets?source=report`)
       .then(readJson)
       .then((d) => {
         setSheets(d.sheets || []);
@@ -49,7 +40,7 @@ export default function ReportsView() {
     if (!selected || !activeSheet) return;
     setLoading(true);
     setError("");
-    fetch(
+    apiFetch(
       `${API}/workbooks/${encodeURIComponent(selected)}/sheets/${encodeURIComponent(activeSheet)}?source=report`
     )
       .then(readJson)

@@ -6,6 +6,8 @@ import CommissionsView from "./components/CommissionsView.jsx";
 import ZohoView from "./components/ZohoView.jsx";
 import ReportsView from "./components/ReportsView.jsx";
 import { IconAudit, IconCloud, IconHistory, IconReports, IconSparkle, IconList } from "./components/Icons.jsx";
+import { useAuth } from "./context/AuthContext.jsx";
+import { authEnabled } from "./lib/supabase.js";
 
 const TABS = [
   { id: "generate", label: "Generate Commissions", subtitle: "Generate the month's workbook in one click", icon: IconSparkle },
@@ -19,6 +21,7 @@ const TABS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState("generate");
   const active = useMemo(() => TABS.find((tab) => tab.id === activeTab) || TABS[0], [activeTab]);
+  const { user, signOut } = useAuth();
 
   return (
     <div className="app-shell">
@@ -56,7 +59,18 @@ export default function App() {
               <span className="sidebar-status-label">Source</span>
               <span className="sidebar-status-value">Zoho Books</span>
             </div>
+            {authEnabled && user ? (
+              <div className="sidebar-status-row">
+                <span className="sidebar-status-label">User</span>
+                <span className="sidebar-status-value sidebar-user-email">{user.email}</span>
+              </div>
+            ) : null}
           </div>
+          {authEnabled ? (
+            <button type="button" className="btn btn-sm btn-block sidebar-signout" onClick={() => signOut()}>
+              Sign out
+            </button>
+          ) : null}
           Recommended flow: Sync -&gt; Audit -&gt; Review -&gt; Export.
         </div>
       </aside>

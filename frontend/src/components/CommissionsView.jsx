@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ExcelGrid from "./ExcelGrid.jsx";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-
-const API = "/api";
+import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const GROUP_LABELS = {
   summary: "Summary",
@@ -93,14 +92,6 @@ function pickDefaultSheet(meta, workbookKind) {
   return sheetList[0] || "";
 }
 
-async function readJson(res) {
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.detail || `Request failed (${res.status})`);
-  }
-  return data;
-}
-
 export default function CommissionsView() {
   const period = new Date();
   const [tree, setTree] = useState({ years: [] });
@@ -142,7 +133,7 @@ export default function CommissionsView() {
 
   async function loadTree() {
     try {
-      const data = await readJson(await fetch(`${API}/commissions/tree`));
+      const data = await readJson(await apiFetch(`${API}/commissions/tree`));
       setTree(data);
       const firstYear = data.years?.[0];
       if (firstYear) {
@@ -159,7 +150,7 @@ export default function CommissionsView() {
 
   async function loadSqliteStatus() {
     try {
-      const data = await readJson(await fetch(`${API}/db/status`));
+      const data = await readJson(await apiFetch(`${API}/db/status`));
       setSqliteStatus(data);
     } catch {
       setSqliteStatus(null);
@@ -171,7 +162,7 @@ export default function CommissionsView() {
     setError("");
     try {
       const data = await readJson(
-        await fetch(
+        await apiFetch(
           `${API}/commissions/sqlite/summary?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(sqliteMonth)}`
         )
       );
@@ -189,7 +180,7 @@ export default function CommissionsView() {
     setError("");
     try {
       const data = await readJson(
-        await fetch(
+        await apiFetch(
           `${API}/commissions/sqlite/table?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(
             sqliteMonth
           )}&table=${encodeURIComponent(sqliteTable)}&limit=1500`
@@ -230,7 +221,7 @@ export default function CommissionsView() {
     setError("");
     try {
       const data = await readJson(
-        await fetch(`${API}/commissions/workbooks/${encodeURIComponent(id)}/meta`)
+        await apiFetch(`${API}/commissions/workbooks/${encodeURIComponent(id)}/meta`)
       );
       setSheetGroups(data.groups || {});
       setSheets(data.sheets || []);
@@ -256,7 +247,7 @@ export default function CommissionsView() {
     setError("");
     try {
       const data = await readJson(
-        await fetch(
+        await apiFetch(
           `${API}/commissions/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent(sheet)}`
         )
       );
@@ -309,12 +300,15 @@ export default function CommissionsView() {
     () => selectedMonthWorkbooks.find((wb) => wb.kind === "full") || null,
     [selectedMonthWorkbooks]
   );
-  const fullDownloadHref = fullWorkbook
-    ? `${API}/commissions/workbooks/${encodeURIComponent(fullWorkbook.id)}/download`
-    : "";
-  const selectedDownloadHref = activeWorkbook
-    ? `${API}/commissions/workbooks/${encodeURIComponent(activeWorkbook.id)}/download`
-    : "";
+  async function exportWorkbook(workbook) {
+    if (!workbook?.id) return;
+    try {
+      const name = cleanWorkbookName(workbook.label) || "workbook.xlsx";
+      await downloadApi(`${API}/commissions/workbooks/${encodeURIComponent(workbook.id)}/download`, name);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   useEffect(() => {
     if (!filteredWorkbooks.length) {
@@ -553,20 +547,24 @@ export default function CommissionsView() {
                   </option>
                 ))}
               </select>
-              <a
-                className={`btn btn-sm ${!fullDownloadHref ? "disabled" : ""}`}
-                href={fullDownloadHref || undefined}
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={!fullWorkbook}
+                onClick={() => exportWorkbook(fullWorkbook)}
                 title="Download full B2B workbook for this month"
               >
                 Export Full B2B
-              </a>
-              <a
-                className={`btn btn-sm ${!selectedDownloadHref ? "disabled" : ""}`}
-                href={selectedDownloadHref || undefined}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={!activeWorkbook}
+                onClick={() => exportWorkbook(activeWorkbook)}
                 title="Download currently selected workbook"
               >
                 {activeWorkbook?.kind === "individual" ? "Export Selected Individual" : "Export Selected Workbook"}
-              </a>
+              </button>
               <button type="button" className="btn btn-sm" onClick={() => setSourceMode("sqlite")}>
                 Switch to SQLite Data
               </button>
