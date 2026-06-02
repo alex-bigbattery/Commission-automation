@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { KpiCard, Banner, money, num } from "./ui.jsx";
+import { KpiCard, Banner, money, num, LoadingNotice } from "./ui.jsx";
 import { IconSearch, IconDollar, IconChart, IconAlert, IconCheck, IconInfo, IconSparkle, IconX } from "./Icons.jsx";
 
 import { API, apiFetch, readJson } from "../lib/api.js";
@@ -100,6 +100,7 @@ export default function AdjustmentsView() {
   const [rows, setRows] = useState([]);
   const [roster, setRoster] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState(null);
@@ -110,13 +111,15 @@ export default function AdjustmentsView() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
 
   async function load() {
-    setLoading(true); setError("");
+    setLoading(true);
+    setLoadingPeriod(true);
+    setError("");
     try {
       const data = await readJson(await apiFetch(`${API}/adjustments/lines?year=${year}&month=${month}`));
       setRows(data.rows || []);
       setRoster(data.roster || []);
     } catch (err) { setError(err.message); setRows([]); }
-    finally { setLoading(false); }
+    finally { setLoading(false); setLoadingPeriod(false); }
   }
 
   const salespeopleOptions = useMemo(() => {
@@ -271,6 +274,9 @@ export default function AdjustmentsView() {
 
   const badge = (r) => { const s = lineState(r); return <span className={`badge badge-${s.color}`}>{s.label}</span>; };
 
+  const periodLabel = `${MONTHS[month - 1]} ${year}`;
+  const periodBusy = loadingPeriod || loading;
+
   return (
     <div className="page">
       {/* Header + workflow steps */}
@@ -278,11 +284,11 @@ export default function AdjustmentsView() {
         <div className="workflow-period">
           <div className="field">
             <label className="field-label">Year</label>
-            <input className="input" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} />
+            <input className="input" type="number" min="2020" max="2100" value={year} onChange={(e) => setYear(Number(e.target.value))} disabled={periodBusy} />
           </div>
           <div className="field">
             <label className="field-label">Month</label>
-            <select className="select" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+            <select className="select" value={month} onChange={(e) => setMonth(Number(e.target.value))} disabled={periodBusy}>
               {MONTHS.map((n, i) => <option key={n} value={i + 1}>{n}</option>)}
             </select>
           </div>
@@ -296,7 +302,8 @@ export default function AdjustmentsView() {
             <IconSparkle /> Regenerate workbook
           </button>
         </div>
-        <div className="row" style={{ marginLeft: "auto", gap: "0.5rem" }}>
+        <div className="row" style={{ marginLeft: "auto", gap: "0.5rem", flexWrap: "wrap" }}>
+          {loadingPeriod && <LoadingNotice>Loading {periodLabel}…</LoadingNotice>}
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowHelp(true)}>
             <IconInfo /> Help: How Accounting Adjustments Work
           </button>
@@ -322,6 +329,7 @@ export default function AdjustmentsView() {
       {status && <Banner type="success" icon={IconCheck}>{status}</Banner>}
       {error && <Banner type="danger" icon={IconAlert}>{error}</Banner>}
 
+      <div className={loadingPeriod ? "content-loading" : ""}>
       {/* KPIs */}
       <section className="kpi-grid">
         <KpiCard variant="money" label="Calculated Commission" value={money(totals.sys)} icon={IconDollar} />
@@ -402,7 +410,13 @@ export default function AdjustmentsView() {
           <strong>Commission lines — review &amp; adjust</strong>
           <span className="pill">{filtered.length} shown</span>
         </div>
-        <div className="spreadsheet-wrap" style={{ borderRadius: "0 0 14px 14px" }}>
+        <div className={`spreadsheet-wrap ${loadingPeriod ? "is-data-loading" : ""}`} style={{ borderRadius: "0 0 14px 14px", minHeight: 120 }}>
+          {loadingPeriod && (
+            <div className="data-loading-overlay" role="status" aria-live="polite">
+              <span className="spinner" style={{ width: 26, height: 26, borderWidth: 3 }} />
+              <span>Loading commission lines…</span>
+            </div>
+          )}
           <div className="spreadsheet-scroll">
             <table className="spreadsheet adj-table">
               <thead>
@@ -460,6 +474,7 @@ export default function AdjustmentsView() {
           </div>
         </div>
       </section>
+      </div>
 
       {/* ---- Edit drawer ---- */}
       {editing && form && (

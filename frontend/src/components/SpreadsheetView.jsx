@@ -67,7 +67,13 @@ export default function SpreadsheetView({ columns, rows, loading, sheetName, emp
   }
 
   return (
-    <div className="spreadsheet-wrap">
+    <div className={`spreadsheet-wrap ${loading ? "is-data-loading" : ""}`}>
+      {loading && (
+        <div className="data-loading-overlay" role="status" aria-live="polite">
+          <span className="spinner" style={{ width: 26, height: 26, borderWidth: 3 }} />
+          <span>Updating data…</span>
+        </div>
+      )}
       <div className="excel-formula-bar">
         <span className="formula-label">{sheetName || "Sheet"}</span>
         <span className="formula-meta">

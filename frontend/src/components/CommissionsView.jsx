@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ExcelGrid from "./ExcelGrid.jsx";
 import SpreadsheetView from "./SpreadsheetView.jsx";
+import { LoadingNotice } from "./ui.jsx";
 import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const GROUP_LABELS = {
@@ -328,6 +329,8 @@ export default function CommissionsView() {
       label,
       value: idx + 1,
     }));
+    const periodLabel = `${monthOptions.find((m) => m.value === sqliteMonth)?.label || sqliteMonth} ${sqliteYear}`;
+    const sqliteLoading = sqliteLoadingSummary || sqliteLoadingTable;
 
     return (
       <div className="page">
@@ -352,11 +355,11 @@ export default function CommissionsView() {
           <div className="card-body row" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
             <div className="field" style={{ minWidth: "120px" }}>
               <label className="field-label">Year</label>
-              <input className="input" type="number" value={sqliteYear} onChange={(e) => setSqliteYear(Number(e.target.value))} />
+              <input className="input" type="number" value={sqliteYear} onChange={(e) => setSqliteYear(Number(e.target.value))} disabled={sqliteLoading} />
             </div>
             <div className="field" style={{ minWidth: "180px" }}>
               <label className="field-label">Month</label>
-              <select className="select" value={sqliteMonth} onChange={(e) => setSqliteMonth(Number(e.target.value))}>
+              <select className="select" value={sqliteMonth} onChange={(e) => setSqliteMonth(Number(e.target.value))} disabled={sqliteLoading}>
                 {monthOptions.map((m) => (
                   <option key={m.key} value={m.value}>
                     {m.label}
@@ -374,12 +377,14 @@ export default function CommissionsView() {
                 ))}
               </select>
             </div>
-            <button type="button" className="btn btn-sm" onClick={() => { loadSqliteSummary(); loadSqliteTable(); }}>
+            <button type="button" className="btn btn-sm" onClick={() => { loadSqliteSummary(); loadSqliteTable(); }} disabled={sqliteLoading}>
               Refresh
             </button>
+            {sqliteLoading && <LoadingNotice>Loading {periodLabel}…</LoadingNotice>}
           </div>
         </section>
 
+        <div className={sqliteLoading ? "content-loading" : ""}>
         <section className="kpi-grid">
           <div className="kpi-section-label">SQLite period snapshot</div>
           <article className="kpi-card"><div className="kpi-card-label">Sales Orders</div><div className="kpi-card-value">{tableCounts.sales_orders ?? 0}</div></article>
@@ -403,11 +408,12 @@ export default function CommissionsView() {
             <SpreadsheetView
               columns={sqliteGrid.columns}
               rows={sqliteGrid.rows}
-              loading={sqliteLoadingSummary || sqliteLoadingTable}
+              loading={sqliteLoading}
               sheetName={SQLITE_TABLES.find((t) => t.id === sqliteTable)?.label || sqliteTable}
             />
           </div>
         </section>
+        </div>
       </div>
     );
   }
@@ -570,8 +576,8 @@ export default function CommissionsView() {
               </button>
             </div>
           )}
-          {loadingMeta && <span className="loading-pill">Loading workbook…</span>}
-          {loadingGrid && <span className="loading-pill">Loading sheet…</span>}
+          {loadingMeta && <LoadingNotice>Loading workbook…</LoadingNotice>}
+          {loadingGrid && <LoadingNotice>Loading sheet…</LoadingNotice>}
         </div>
 
         <div className="excel-workbook">

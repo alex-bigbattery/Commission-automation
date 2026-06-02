@@ -135,6 +135,19 @@ export function Pill({ variant = "default", dot = false, children }) {
 }
 
 /* ---------------------------------------------------------------------------
+   Loading notice (period / data fetch)
+   --------------------------------------------------------------------------- */
+
+export function LoadingNotice({ children, className = "" }) {
+  return (
+    <div className={`loading-notice ${className}`.trim()} role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
    Currency / number formatting helpers
    --------------------------------------------------------------------------- */
 

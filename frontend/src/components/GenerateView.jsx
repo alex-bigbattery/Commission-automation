@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-import { KpiCard, Banner, money, num } from "./ui.jsx";
+import { KpiCard, Banner, money, num, LoadingNotice } from "./ui.jsx";
 import {
   IconSparkle,
   IconSync,
@@ -42,6 +42,7 @@ export default function GenerateView() {
   const [preview, setPreview] = useState({ columns: [], rows: [] });
 
   const [loading, setLoading] = useState(false);
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -53,6 +54,7 @@ export default function GenerateView() {
   }, [year, month]);
 
   async function refresh() {
+    setLoadingPeriod(true);
     setError("");
     try {
       const input = await readJson(
@@ -75,6 +77,8 @@ export default function GenerateView() {
       }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoadingPeriod(false);
     }
   }
 
@@ -175,6 +179,9 @@ export default function GenerateView() {
       .sort((a, b) => b[1] - a[1]);
   }, [summary]);
 
+  const periodBusy = loadingPeriod || loading || syncing;
+  const periodLabel = `${MONTHS[month - 1]} ${year}`;
+
   return (
     <div className="page">
       {/* Step 1 — period + actions */}
@@ -188,13 +195,14 @@ export default function GenerateView() {
               type="number"
               min="2020"
               max="2100"
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-            />
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            disabled={periodBusy}
+          />
           </div>
           <div className="field">
             <label className="field-label" htmlFor="gen-month">Month</label>
-            <select id="gen-month" className="select" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+            <select id="gen-month" className="select" value={month} onChange={(e) => setMonth(Number(e.target.value))} disabled={periodBusy}>
               {MONTHS.map((name, idx) => (
                 <option key={name} value={idx + 1}>{name}</option>
               ))}
@@ -221,6 +229,7 @@ export default function GenerateView() {
         </div>
 
         <div className="row" style={{ marginLeft: "auto", gap: "0.5rem", flexWrap: "wrap" }}>
+          {loadingPeriod && <LoadingNotice>Loading {periodLabel}…</LoadingNotice>}
           <span className={`pill ${periodReady ? "pill-success" : "pill-warning"}`}>
             <span className="pill-dot" />
             {periodReady ? "Data ready in SQLite" : "No data for this month"}
@@ -238,16 +247,17 @@ export default function GenerateView() {
       {error && (
         <Banner type="danger" icon={IconAlert}>{error}</Banner>
       )}
-      {!periodReady && (
+      {!periodReady && !loadingPeriod && (
         <Banner type="warning" icon={IconAlert}>
-          No SQLite data for <strong>{MONTHS[month - 1]} {year}</strong>. Use{" "}
+          No SQLite data for <strong>{periodLabel}</strong>. Use{" "}
           <strong>Sync Zoho</strong> to pull this month's sales orders, invoices, and shipments.
         </Banner>
       )}
 
+      <div className={loadingPeriod ? "content-loading" : ""}>
       {/* SQLite period snapshot */}
       <section className="kpi-grid">
-        <div className="kpi-section-label">Period data in SQLite ({MONTHS[month - 1]} {year})</div>
+        <div className="kpi-section-label">Period data in SQLite ({periodLabel})</div>
         <KpiCard label="Sales Orders" value={num(periodCounts.sales_orders)} icon={IconList} />
         <KpiCard label="Invoices" value={num(periodCounts.invoices)} icon={IconList} />
         <KpiCard label="Shipments" value={num(periodCounts.shipments)} icon={IconList} />
@@ -269,7 +279,7 @@ export default function GenerateView() {
         <section className="card">
           <div className="empty-state">
             <div className="empty-state-icon"><IconSparkle /></div>
-            <p className="empty-state-title">You haven't generated the {MONTHS[month - 1]} {year} workbook yet</p>
+            <p className="empty-state-title">You haven't generated the {periodLabel} workbook yet</p>
             <p className="empty-state-desc">
               {periodReady
                 ? "Click “Generate Commissions” to build the B2B-style workbook with every salesperson and the summary sheet."
@@ -347,7 +357,7 @@ export default function GenerateView() {
                 <SpreadsheetView
                   columns={exceptions.columns}
                   rows={exceptions.rows}
-                  loading={false}
+                  loading={loadingPeriod}
                   sheetName="Exceptions"
                   emptyHint="No exceptions."
                 />
@@ -356,7 +366,7 @@ export default function GenerateView() {
               <SpreadsheetView
                 columns={preview.columns}
                 rows={preview.rows}
-                loading={false}
+                loading={loadingPeriod}
                 sheetName={activeSheet}
                 emptyHint="Select a sheet to preview."
               />
@@ -364,6 +374,8 @@ export default function GenerateView() {
           </div>
         </section>
       )}
+
+      </div>
 
       <Banner type="info" icon={IconInfo}>
         The workbook is built with the usual B2B structure (one sheet per salesperson + B2B Summary, with live formulas).

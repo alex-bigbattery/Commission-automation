@@ -29,4 +29,4 @@ uvicorn==0.48.0
 watchfiles==1.2.0
 websockets==16.0
 psycopg[binary]>=3.2.0
-PyJWT>=2.8.0
+PyJWT[crypto]>=2.8.0

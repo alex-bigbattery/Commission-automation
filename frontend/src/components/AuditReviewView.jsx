@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
 import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
+import { LoadingNotice } from "./ui.jsx";
 
 const MONTHS = [
   "January",
@@ -67,6 +68,7 @@ export default function AuditReviewView() {
   const [exceptions, setExceptions] = useState({ columns: [], rows: [] });
   const [tableView, setTableView] = useState("exceptions");
   const [loading, setLoading] = useState(false);
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
@@ -121,6 +123,7 @@ export default function AuditReviewView() {
   }
 
   async function refreshStatus(overrideReportId = "") {
+    setLoadingPeriod(true);
     setError("");
     try {
       const statusData = await readJson(
@@ -165,6 +168,8 @@ export default function AuditReviewView() {
       }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoadingPeriod(false);
     }
   }
 
@@ -340,6 +345,9 @@ export default function AuditReviewView() {
       currency: "USD",
     });
 
+  const periodLabel = `${MONTHS[month - 1]} ${year}`;
+  const periodBusy = loadingPeriod || loading;
+
   return (
     <div className="page">
       <section className="page-header">
@@ -367,13 +375,14 @@ export default function AuditReviewView() {
               max="2100"
               value={year}
               onChange={(e) => setYear(Number(e.target.value))}
+              disabled={periodBusy}
             />
           </div>
           <div className="field">
             <label className="field-label" htmlFor="audit-month">
               Month
             </label>
-            <select className="select" id="audit-month" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+            <select className="select" id="audit-month" value={month} onChange={(e) => setMonth(Number(e.target.value))} disabled={periodBusy}>
               {MONTHS.map((name, idx) => (
                 <option key={name} value={idx + 1}>
                   {name}
@@ -424,16 +433,21 @@ export default function AuditReviewView() {
             </div>
           </div>
         </div>
+
+        {loadingPeriod && (
+          <LoadingNotice>Loading {periodLabel}…</LoadingNotice>
+        )}
       </section>
 
       {status && <div className="banner banner-success">{status}</div>}
       {error && <div className="banner banner-danger">{error}</div>}
-      {!periodReady && (
+      {!periodReady && !loadingPeriod && (
         <div className="banner banner-warning">
-          No SQLite data for {MONTHS[month - 1]} {year}. Run <strong>Sync Latest Zoho Data</strong> first.
+          No SQLite data for {periodLabel}. Run <strong>Sync Latest Zoho Data</strong> first.
         </div>
       )}
 
+      <div className={loadingPeriod ? "content-loading" : ""}>
       <section className="card">
         <div className="card-header">
           <h3 className="card-title">SQLite Database Status</h3>
@@ -467,7 +481,7 @@ export default function AuditReviewView() {
       </section>
 
       <section className="kpi-grid">
-        <div className="kpi-section-label">Selected period in SQLite ({MONTHS[month - 1]} {year})</div>
+        <div className="kpi-section-label">Selected period in SQLite ({periodLabel})</div>
         <article className="kpi-card">
           <div className="kpi-card-label">Sales Orders</div>
           <div className="kpi-card-value">{statusCards.sales_orders_count ?? 0}</div>
@@ -607,12 +621,13 @@ export default function AuditReviewView() {
             <SpreadsheetView
               columns={reportColumns}
               rows={reportRows}
-              loading={loading}
+              loading={loading || loadingPeriod}
               sheetName={`${reportTitle}${reportId ? ` (${reportId})` : ""}`}
             />
           </div>
         </div>
       </section>
+      </div>
     </div>
   );
 }

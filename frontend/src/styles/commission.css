@@ -1138,6 +1138,46 @@ button {
   color: var(--bb-text-muted);
 }
 
+.loading-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--bb-navy-700);
+  background: #eef6ff;
+  border: 1px solid rgba(7, 55, 99, 0.18);
+  border-radius: var(--r-pill);
+  padding: 0.35rem 0.85rem;
+  white-space: nowrap;
+}
+
+.content-loading {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.is-data-loading {
+  position: relative;
+}
+
+.data-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--bb-navy-700);
+  font-size: 0.9rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .excel-workbook {
   display: flex;
   flex-direction: column;

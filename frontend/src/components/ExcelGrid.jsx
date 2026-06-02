@@ -56,7 +56,13 @@ export default function ExcelGrid({ grid, loading, title }) {
   const { columns, rows } = grid;
 
   return (
-    <div className="excel-workbook">
+    <div className={`excel-workbook ${loading ? "is-data-loading" : ""}`}>
+      {loading && (
+        <div className="data-loading-overlay" role="status" aria-live="polite">
+          <span className="spinner" style={{ width: 26, height: 26, borderWidth: 3 }} />
+          <span>Loading sheet…</span>
+        </div>
+      )}
       <div className="excel-formula-bar">
         <span className="formula-label">Sheet</span>
         <span className="formula-value">{title || grid.sheet}</span>
