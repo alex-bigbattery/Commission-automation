@@ -2082,3 +2082,52 @@ button {
   display: block; margin-top: 0.25rem; font-size: 11px; white-space: pre-wrap;
   word-break: break-word; color: var(--bb-text-muted); font-family: var(--font-mono);
 }
+
+/* =========================================================================
+   Help / User Guide
+   ========================================================================= */
+.help-page { max-width: 1000px; }
+.help-hero { background: linear-gradient(135deg, var(--bb-navy-50), #fff); }
+.help-hero-title { display: flex; align-items: center; gap: 0.5rem; font-size: 20px; font-weight: 800; margin: 0 0 0.35rem; color: var(--bb-text); }
+.help-hero-title svg { width: 22px; height: 22px; color: var(--bb-accent); }
+.help-hero-sub { font-size: 13.5px; color: var(--bb-text-muted); margin: 0 0 0.85rem; max-width: 760px; }
+.help-toc { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+.help-section { scroll-margin-top: 1rem; }
+.help-section .card-title svg { width: 18px; height: 18px; color: var(--bb-accent); }
+
+.help-list { margin: 0; padding-left: 1.2rem; }
+.help-list li { margin-bottom: 0.4rem; font-size: 13px; }
+
+.help-steps { display: flex; flex-direction: column; gap: 0.6rem; }
+.help-step { display: flex; align-items: flex-start; gap: 0.7rem; }
+.help-step-num {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--bb-accent); color: #fff; font-weight: 700; font-size: 13px;
+  display: grid; place-items: center;
+}
+.help-step .text-faint { font-size: 12.5px; }
+
+.help-glossary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.9rem 1.2rem; }
+.help-glossary > div { min-width: 0; }
+.help-term { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 700; font-size: 13px; color: var(--bb-text); }
+.help-term svg { width: 15px; height: 15px; color: var(--bb-accent); }
+.help-glossary p { margin: 0.25rem 0 0; font-size: 12.5px; color: var(--bb-text-muted); }
+
+.help-flow { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.help-flow li { font-size: 13px; }
+.help-flow svg { width: 14px; height: 14px; vertical-align: -2px; color: var(--bb-accent); }
+
+.help-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem 1rem; margin: 0.75rem 0; }
+.help-actions > div { font-size: 12.5px; color: var(--bb-text-muted); display: flex; align-items: center; gap: 0.45rem; }
+
+.help-faq { border-top: 1px solid var(--bb-divider); padding: 0.55rem 0; }
+.help-faq summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--bb-text); }
+.help-faq p { margin: 0.4rem 0 0; font-size: 12.5px; color: var(--bb-text-muted); }
+
+.help-footer { text-align: center; font-size: 12px; margin: 0.5rem 0 1rem; }
+.help-footer a, .help-glossary a, .help-list a { color: var(--bb-accent); font-weight: 600; }
+
+@media (max-width: 720px) {
+  .help-glossary, .help-actions { grid-template-columns: 1fr; }
+}

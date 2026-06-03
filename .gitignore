@@ -36,3 +36,6 @@ frontend/dist/
 
 backend/__pycache__/
 
+
+# Local exported chat context (do not publish)
+CONVERSATION_CONTEXT.txt
