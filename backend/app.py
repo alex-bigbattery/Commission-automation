@@ -74,6 +74,12 @@ _extra = os.environ.get("ALLOWED_ORIGINS", "")
 if _extra.strip():
     _default_origins.extend(o.strip() for o in _extra.split(",") if o.strip())
 
+# IMPORTANT — middleware order: the LAST add_middleware is the OUTERMOST.
+# Auth is added first (inner) and CORS last (outer) so that EVERY response —
+# including 401s/errors raised by the auth middleware — passes back through
+# CORSMiddleware and carries the Access-Control-Allow-Origin header. Otherwise
+# the browser reports an auth 401 as an opaque "blocked by CORS policy" error.
+app.add_middleware(SupabaseAuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_default_origins,
@@ -81,7 +87,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(SupabaseAuthMiddleware)
 
 
 class FetchRequest(BaseModel):
