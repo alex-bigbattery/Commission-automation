@@ -348,7 +348,7 @@ export default function GenerateView() {
             {tab === "preview" && sheets.length > 0 && (
               <select
                 className="select"
-                style={{ maxWidth: 220 }}
+                style={{ maxWidth: 220, minWidth: 0, flex: "0 1 220px" }}
                 value={activeSheet}
                 onChange={(e) => {
                   setActiveSheet(e.target.value);

@@ -2131,3 +2131,109 @@ button {
 @media (max-width: 720px) {
   .help-glossary, .help-actions { grid-template-columns: 1fr; }
 }
+
+/* =========================================================================
+   Responsive — tablet (≤760px)
+   ========================================================================= */
+@media (max-width: 760px) {
+  :root {
+    --content-pad: 1rem;
+  }
+
+  .workflow-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-period {
+    flex-wrap: wrap;
+  }
+
+  .workflow-step-divider {
+    display: none;
+  }
+
+  .app-header-subtitle {
+    display: none;
+  }
+
+  .commissions-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .commissions-aside {
+    max-height: 260px;
+  }
+}
+
+/* =========================================================================
+   Responsive — phone (≤480px)
+   ========================================================================= */
+@media (max-width: 480px) {
+  :root {
+    --content-pad: 0.75rem;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.5rem var(--content-pad);
+    min-height: var(--header-h);
+  }
+
+  .app-header-title h1 {
+    font-size: 16px;
+  }
+
+  .app-header-meta {
+    flex-wrap: wrap;
+  }
+
+  .kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .info-grid,
+  .impact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .search-input {
+    max-width: 100%;
+  }
+
+  .table-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .table-toolbar .search-input {
+    max-width: 100%;
+  }
+
+  .spreadsheet-scroll {
+    max-height: calc(100vh - 240px);
+  }
+
+  .adj-drawer {
+    width: 100%;
+    height: 92dvh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+
+  .adj-drawer-backdrop {
+    align-items: flex-end;
+  }
+
+  .status-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .page-title {
+    font-size: 18px;
+  }
+
+  .mobile-nav {
+    padding: 0.4rem var(--content-pad);
+  }
+}

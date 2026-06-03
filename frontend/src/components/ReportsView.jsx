@@ -65,7 +65,7 @@ export default function ReportsView() {
 
       <section className="card">
         <div className="card-body row" style={{ flexWrap: "wrap", gap: "0.9rem" }}>
-          <div className="field" style={{ minWidth: "320px", flex: 1 }}>
+          <div className="field" style={{ minWidth: "200px", flex: 1 }}>
             <label className="field-label" htmlFor="report-select">
               Generated report
             </label>

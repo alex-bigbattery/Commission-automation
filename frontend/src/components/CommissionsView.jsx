@@ -367,7 +367,7 @@ export default function CommissionsView() {
                 ))}
               </select>
             </div>
-            <div className="field" style={{ minWidth: "280px", flex: 1 }}>
+            <div className="field" style={{ minWidth: "160px", flex: 1 }}>
               <label className="field-label">Table</label>
               <select className="select" value={sqliteTable} onChange={(e) => setSqliteTable(e.target.value)}>
                 {SQLITE_TABLES.map((t) => (
@@ -544,7 +544,7 @@ export default function CommissionsView() {
                 className="select"
                 value={workbookId}
                 onChange={(e) => setWorkbookId(e.target.value)}
-                style={{ minWidth: "380px", maxWidth: "100%" }}
+                style={{ minWidth: "180px", maxWidth: "100%", flex: 1 }}
               >
                 {filteredWorkbooks.length === 0 && <option value="">No workbook for this filter</option>}
                 {filteredWorkbooks.map((wb) => (
