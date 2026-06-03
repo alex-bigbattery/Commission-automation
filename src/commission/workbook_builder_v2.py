@@ -721,11 +721,17 @@ def build_master_workbook(
         summary_ws.cell(18, 9, f"{month_name.upper()} {year} ORDERS - SHIPPED AND INVOICED")
         _clean_summary_formulas(summary_ws)
 
+    missing = [d.name for d in salespeople if d.name not in wb.sheetnames]
+    if missing:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Roster entries not in template (skipped): %s. "
+            "Fix COMMISSION_ROSTER env var or add sheets to template.",
+            missing,
+        )
     for data in salespeople:
         if data.name not in wb.sheetnames:
-            raise ValueError(
-                f"Sheet {data.name!r} not found in template. Available: {wb.sheetnames}"
-            )
+            continue  # skip roster members without a template sheet
         ws = wb[data.name]
         _update_salesperson_sheet_in_place(ws, data)
 

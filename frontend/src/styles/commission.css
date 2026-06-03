@@ -256,7 +256,7 @@ button {
 .app-main {
   background: var(--bb-bg);
   display: grid;
-  grid-template-rows: var(--header-h) 1fr;
+  grid-template-rows: var(--header-h) auto 1fr;
   min-width: 0;
   min-height: 0;
 }
@@ -1423,6 +1423,14 @@ button {
   border-bottom: 1px solid var(--bb-border);
   background: var(--bb-bg-elev);
   overflow-x: auto;
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.07);
+  scrollbar-width: none;
+}
+.mobile-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .mobile-nav-btn {
@@ -1445,9 +1453,9 @@ button {
 }
 
 .mobile-nav-btn.active {
-  background: var(--bb-navy-100);
-  color: var(--bb-navy-700);
-  border-color: #bfdbfe;
+  background: var(--bb-navy-800);
+  color: #fff;
+  border-color: var(--bb-navy-800);
 }
 
 /* Legacy classes used by current React views */

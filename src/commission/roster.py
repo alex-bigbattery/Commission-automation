@@ -27,7 +27,6 @@ DEFAULT_ROSTER_ENTRIES: list[tuple[str, str]] = [
     ("Leslie", "Leslie Neipert"),
     ("Carmen", "Carmen Daetz"),
     ("Garrett", "Garrett Lockhart"),
-    ("Kara", "Kara"),
 ]
 
 EXTRA_NAME_ALIASES: dict[str, str] = {
