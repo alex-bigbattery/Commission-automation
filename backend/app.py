@@ -4,6 +4,7 @@ import base64
 import calendar
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -14,7 +15,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .auth_middleware import SupabaseAuthMiddleware
 
@@ -110,10 +111,20 @@ class RunAuditRequest(BaseModel):
     disable_summary_normalization: bool = False
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 class SyncFullRequest(BaseModel):
     date_start: str = "2021-01-01"
     date_end: str = "today"
     skip_details: bool = False
+
+    @field_validator("date_start", "date_end")
+    @classmethod
+    def _validate_date(cls, v: str) -> str:
+        if v != "today" and not _DATE_RE.match(v):
+            raise ValueError("Date must be YYYY-MM-DD or 'today'.")
+        return v
 
 
 class GenerateCommissionRequest(BaseModel):
@@ -342,12 +353,14 @@ def commission_workbook_download(workbook_id: str):
 def _json_ready(value):
     if value is None:
         return None
+    if isinstance(value, (list, dict)):
+        return value
     try:
         if pd.isna(value):
             return None
-    except Exception:
+    except (TypeError, ValueError):
         pass
-    if isinstance(value, (datetime,)):
+    if isinstance(value, datetime):
         return value.isoformat(sep=" ")
     return value
 
@@ -361,10 +374,15 @@ def _frame_to_grid(frame: pd.DataFrame, limit: int = 500) -> dict:
     return {"columns": columns, "rows": rows, "total_rows": int(len(frame))}
 
 
+def _validate_period(year: int, month: int) -> None:
+    _validate_period(year, month)
+    if year < 2015 or year > 2100:
+        raise HTTPException(status_code=400, detail="Year must be between 2015 and 2100.")
+
+
 @app.get("/api/commissions/sqlite/summary")
 def commissions_sqlite_summary(year: int, month: int) -> dict:
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(year, month)
     data = load_commission_input(year, month)
     line_counts = line_type_counts(data)
     table_counts = {
@@ -386,8 +404,7 @@ def commissions_sqlite_summary(year: int, month: int) -> dict:
 
 @app.get("/api/commissions/sqlite/table")
 def commissions_sqlite_table(year: int, month: int, table: str, limit: int = Query(default=500, ge=1, le=5000)) -> dict:
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(year, month)
     data = load_commission_input(year, month)
     table_map = {
         "sales_orders": data.sales_orders,
@@ -413,11 +430,11 @@ def commissions_sqlite_table(year: int, month: int, table: str, limit: int = Que
 
 
 def _commission_output_path(year: int, month: int) -> Path:
-    return OUTPUT_DIR / f"commission_b2b_{calendar.month_name[month].lower()}_{year}.xlsx"
+    return OUTPUT_DIR / f"{year}-{month}_Commission B2B.xlsx"
 
 
 def _commission_meta_path(year: int, month: int) -> Path:
-    return OUTPUT_DIR / f"commission_b2b_{calendar.month_name[month].lower()}_{year}.meta.json"
+    return OUTPUT_DIR / f"{year}-{month}_Commission B2B.meta.json"
 
 
 def _read_commission_meta(year: int, month: int) -> dict | None:
@@ -432,8 +449,7 @@ def _read_commission_meta(year: int, month: int) -> dict | None:
 
 @app.post("/api/commission/generate")
 def commission_generate(body: GenerateCommissionRequest) -> dict:
-    if body.month < 1 or body.month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(body.year, body.month)
     if not MASTER_TEMPLATE.exists():
         raise HTTPException(status_code=500, detail=f"Master template not found at {MASTER_TEMPLATE}.")
     if not has_period_data(body.year, body.month):
@@ -526,8 +542,7 @@ def adjustments_lines(
     sales_team: str | None = None,
 ) -> dict:
     """Per-line review grid: system / adjustment / final, with any stored adjustment merged in."""
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(year, month)
     if not has_period_data(year, month):
         raise HTTPException(
             status_code=400,
@@ -594,8 +609,7 @@ def adjustments_list(
 
 @app.post("/api/adjustments")
 def adjustments_upsert(body: AdjustmentPayload) -> dict:
-    if body.period_month < 1 or body.period_month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(body.period_year, body.period_month)
     if not (body.line_uid or body.invoice_number or body.sales_order_number):
         raise HTTPException(status_code=400, detail="Provide line_uid or invoice/sales order to identify the line.")
     record = upsert_adjustment(body.model_dump())
@@ -611,13 +625,13 @@ def adjustments_delete(adjustment_id: int) -> dict:
 
 @app.post("/api/uploads")
 def upload_period_files(body: UploadBatchRequest) -> dict:
-    if body.month < 1 or body.month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(body.year, body.month)
 
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     expected_paths = _period_input_paths(body.year, body.month)
     saved: list[dict] = []
 
+    MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB per file
     for payload in body.files:
         if payload.kind not in expected_paths:
             raise HTTPException(status_code=400, detail=f"Unsupported file kind '{payload.kind}'.")
@@ -626,6 +640,8 @@ def upload_period_files(body: UploadBatchRequest) -> dict:
             data = base64.b64decode(payload.content_base64)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid base64 for '{payload.kind}'.") from exc
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"File '{payload.kind}' exceeds 50 MB limit.")
         target.write_bytes(data)
         saved.append(
             {
@@ -641,8 +657,7 @@ def upload_period_files(body: UploadBatchRequest) -> dict:
 
 @app.get("/api/input/status")
 def input_status(year: int = Query(...), month: int = Query(...)) -> dict:
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=400, detail="Month must be 1-12.")
+    _validate_period(year, month)
     expected_paths = _period_input_paths(year, month)
     files = {
         kind: {
@@ -725,7 +740,7 @@ def run_audit(body: RunAuditRequest) -> dict:
 @app.get("/api/audit/summary")
 def audit_summary(report_id: str | None = None, year: int | None = None, month: int | None = None) -> dict:
     if report_id:
-        report_path = OUTPUT_DIR / report_id
+        report_path = _safe_output_path(report_id)
     else:
         generated = _generated_reports()
         if not generated:
@@ -795,9 +810,17 @@ def audit_summary(report_id: str | None = None, year: int | None = None, month: 
     }
 
 
+def _safe_output_path(report_id: str) -> Path:
+    """Resolve report_id inside OUTPUT_DIR, rejecting path traversal attempts."""
+    path = (OUTPUT_DIR / report_id).resolve()
+    if not str(path).startswith(str(OUTPUT_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid report id.")
+    return path
+
+
 @app.get("/api/downloads/reports/{report_id}")
 def download_report(report_id: str):
-    path = OUTPUT_DIR / report_id
+    path = _safe_output_path(report_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found.")
     return FileResponse(path=path, filename=path.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -956,20 +979,23 @@ def _run_sync_job(skip_details: bool) -> None:
             result = run_incremental_sync(
                 client, repo, skip_details=skip_details, continue_on_module_error=True
             )
-        _sync_state.update(
-            status=result.get("status", "completed") if result.get("status") != "failed" else "failed",
-            sync_id=result.get("sync_id"),
-            totals=result.get("totals"),
-            modules=result.get("modules"),
-            warnings=result.get("warnings") or [],
-            errors=result.get("errors") or [],
-            db=database_status(),
-        )
+        with _sync_lock:
+            _sync_state.update(
+                status=result.get("status", "completed") if result.get("status") != "failed" else "failed",
+                sync_id=result.get("sync_id"),
+                totals=result.get("totals"),
+                modules=result.get("modules"),
+                warnings=result.get("warnings") or [],
+                errors=result.get("errors") or [],
+                db=database_status(),
+            )
     except Exception as exc:  # ZohoAuthError, network, etc.
-        _sync_state.update(status="failed", errors=[str(exc)])
+        with _sync_lock:
+            _sync_state.update(status="failed", errors=[str(exc)])
     finally:
-        _sync_state["running"] = False
-        _sync_state["finished_at"] = _utcnow()
+        with _sync_lock:
+            _sync_state["running"] = False
+            _sync_state["finished_at"] = _utcnow()
 
 
 @app.post("/api/sync/incremental")
@@ -987,7 +1013,12 @@ def sync_incremental(skip_details: bool = False) -> dict:
             running=True, status="running", started_at=_utcnow(),
             finished_at=None, totals=None, modules=None, warnings=[], errors=[], db=None,
         )
-    threading.Thread(target=_run_sync_job, args=(skip_details,), daemon=True).start()
+    try:
+        threading.Thread(target=_run_sync_job, args=(skip_details,), daemon=True).start()
+    except Exception as exc:
+        with _sync_lock:
+            _sync_state.update(running=False, status="failed", errors=[str(exc)])
+        raise HTTPException(status_code=500, detail="Failed to start sync thread.") from exc
     return {"status": "started", "mode": "incremental", "message": "Sync started in background."}
 
 
@@ -1053,11 +1084,12 @@ def fetch_zoho_data(body: FetchRequest) -> dict:
 
 
 def _resolve_data_workbook(workbook_id: str, source: str) -> Path:
-    if source == "report":
-        path = OUTPUT_DIR / workbook_id
-    else:
-        path = EXPORT_DIR / workbook_id
-
+    if source not in ("report", "zoho"):
+        raise HTTPException(status_code=400, detail="Invalid source.")
+    base = OUTPUT_DIR if source == "report" else EXPORT_DIR
+    path = (base / workbook_id).resolve()
+    if not str(path).startswith(str(base.resolve())):
+        raise HTTPException(status_code=400, detail="Invalid workbook id.")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Workbook not found.")
     return path

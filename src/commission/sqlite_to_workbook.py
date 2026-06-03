@@ -205,7 +205,9 @@ def load_map_from_template(template_path: Path | None) -> dict[str, float]:
 
 
 def commission_rate(discount: float, rate_type: str, tiers: list[tuple[float, float, float]]) -> float:
-    """Largest tier whose discount <= the line's discount; column by rate_type."""
+    """Largest tier whose discount <= the line's discount; column by rate_type.
+    Tiers MUST be sorted ascending by threshold (index 0) — caller's responsibility.
+    """
     if not tiers:
         return 0.0
     idx = 2 if rate_type == "non_salaried" else 1
@@ -265,12 +267,16 @@ class InvoiceLineRecord:
 
 
 def _load_item_map(conn: DbConnection) -> dict[str, float]:
-    """sku -> MAP unit price (items.rate). SKU upper-cased for matching."""
+    """sku -> MAP unit price (items.rate). SKU upper-cased for matching.
+    When duplicates exist, the row with the highest rowid (latest inserted) wins.
+    """
     out: dict[str, float] = {}
-    for row in conn.execute("SELECT sku, rate FROM items WHERE sku IS NOT NULL AND sku != ''").fetchall():
-        sku = str(row["sku"]).strip()
-        if sku:
-            out[sku.upper()] = float(row["rate"] or 0)
+    for row in conn.execute(
+        "SELECT sku, rate FROM items WHERE sku IS NOT NULL AND sku != '' ORDER BY sku, rowid DESC"
+    ).fetchall():
+        sku = str(row["sku"]).strip().upper()
+        if sku and sku not in out:  # first = highest rowid = most recent
+            out[sku] = float(row["rate"] or 0)
     return out
 
 
@@ -515,7 +521,11 @@ def _ar_status(rec: InvoiceLineRecord) -> str:
         return "PAID"
     if rec.balance > 0:
         return "UNPAID"
-    return "REVIEW"
+    return "REVIEW"  # negative balance = over-payment / credit note
+
+
+def _is_negative_balance(rec: InvoiceLineRecord) -> bool:
+    return rec.balance < 0 and rec.payment_date is None
 
 
 def _build_detail_row(
@@ -761,6 +771,16 @@ def build_salespeople_from_sqlite(
                 amount=rec.item_total,
                 reason="Unpaid — included, confirm before payout",
             ))
+        if _is_negative_balance(rec):
+            flags.append("NEGATIVE_BALANCE")
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason="Negative balance (credit / over-payment) — verify before payout",
+            ))
 
         # Rule (shared with the audit engine) — commission only on quantity kept.
         comm_qty, factor, ret_status = commissionable_quantity(
@@ -809,10 +829,14 @@ def build_salespeople_from_sqlite(
             ln.classification = cls
             ln.sheet = "Company Acct"
             ln.pending = False
-        new_sheet = _resolve_sheet(adj.get("adjusted_salesperson"))
-        if new_sheet:
-            ln.sheet = new_sheet
-            ln.pending = False
+        raw_sp = adj.get("adjusted_salesperson")
+        if raw_sp:
+            new_sheet = _resolve_sheet(raw_sp)
+            if new_sheet:
+                ln.sheet = new_sheet
+                ln.pending = False
+            else:
+                ln.flags.append("ADJ_SALESPERSON_NOT_IN_ROSTER")
         if adj.get("adjusted_commissionable") is not None:
             ln.detail.item_total = float(adj["adjusted_commissionable"])
         if adj.get("adjusted_map") is not None:
@@ -822,7 +846,9 @@ def build_salespeople_from_sqlite(
             if adj.get("adjusted_discount") is not None:
                 ln.detail.commission_rate = commission_rate(float(adj["adjusted_discount"]), rt, tiers)
             else:
-                d = implied_discount(ln.detail.item_total, ln.detail.map_price, ln.rec.quantity)
+                # Use commissionable qty (after returns) so the implied discount is correct
+                comm_qty = ln.detail.quantity or ln.rec.quantity
+                d = implied_discount(ln.detail.item_total, ln.detail.map_price, comm_qty)
                 ln.detail.commission_rate = commission_rate(d, rt, tiers) if ln.detail.map_price > 0 else 0.0
         if ln.adj_reason:
             ln.detail.reason = ln.adj_reason

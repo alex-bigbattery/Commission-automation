@@ -82,7 +82,7 @@ export default function GenerateView() {
     }
   }
 
-  async function loadExceptions() {
+  async function loadExceptions(_reportId) {
     const data = await readJson(
       await apiFetch(`${API}/commission/exceptions?year=${year}&month=${month}`)
     );

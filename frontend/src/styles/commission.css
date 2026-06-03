@@ -2004,6 +2004,86 @@ button {
 .confirm-title svg { width: 18px; height: 18px; }
 .confirm-box p { font-size: 13px; color: var(--bb-text-muted); margin: 0 0 0.85rem; }
 
+/* =========================================================================
+   Quick-confirm modal (Approve / Exclude)
+   ========================================================================= */
+.confirm-modal-card {
+  background: var(--bb-bg-elev);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-lg);
+  width: min(480px, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  animation: fade-in 0.15s ease;
+  overflow: hidden;
+}
+
+.confirm-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--bb-divider);
+  border-left: 4px solid var(--bb-accent);
+}
+
+.confirm-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.confirm-modal-body {
+  padding: 1rem;
+}
+
+.confirm-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 1rem;
+  font-size: 13px;
+  background: var(--bb-bg-soft);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--r-md);
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.confirm-modal-grid span {
+  color: var(--bb-text-muted);
+  font-size: 12px;
+}
+
+.confirm-modal-grid strong {
+  color: var(--bb-text);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.confirm-modal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  background: var(--bb-rose-soft);
+  border: 1px solid #fecaca;
+  border-radius: var(--r-sm);
+  padding: 0.5rem 0.65rem;
+  font-size: 12.5px;
+  color: #991b1b;
+  margin-bottom: 0.5rem;
+}
+
+.confirm-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--bb-divider);
+  background: var(--bb-bg-soft);
+}
+
 /* login */
 .login-page {
   min-height: 100vh;

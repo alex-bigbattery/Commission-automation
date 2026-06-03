@@ -591,14 +591,20 @@ def _write_status_banner(ws, status_info: dict, month_name: str, year: int) -> N
     except Exception:
         pass
 
+    # Find the last used row so the draft warning and status block always land
+    # below the content regardless of how many rows the template has.
+    last_used = ws.max_row or 40
+
     # Prominent payment warning while draft.
     if is_draft:
-        warn = ws.cell(42, 4, "This workbook is a DRAFT and should not be used for payment until pending "
-                              "lines and shipment data are resolved.")
+        warn_row = last_used + 1
+        warn = ws.cell(warn_row, 4, "This workbook is a DRAFT and should not be used for payment until pending "
+                                    "lines and shipment data are resolved.")
         warn.font = Font(bold=True, italic=True, color="C0392B")
+        last_used = warn_row
 
     # Status detail block (below the summary content).
-    base = 43
+    base = last_used + 1
     bold = Font(bold=True)
     ws.cell(base, 4, "GENERATION STATUS").font = Font(bold=True, size=11)
     rows = [

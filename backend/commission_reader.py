@@ -13,10 +13,18 @@ from openpyxl.cell.cell import Cell
 # Root folder for the historical "Commissions / History" workbooks.
 # Override with the COMMISSIONS_ROOT env var when deploying off the local PC
 # (e.g. a mounted disk on Render). Falls back to the local Windows path.
+_commissions_root_env = os.environ.get("COMMISSIONS_ROOT", "")
 COMMISSIONS_DIR = Path(
-    os.environ.get("COMMISSIONS_ROOT")
+    _commissions_root_env
     or r"C:\Users\Bigbattery\Downloads\Commissions-20260529T132541Z-3-001\Commissions"
 )
+if not _commissions_root_env and not COMMISSIONS_DIR.exists():
+    import warnings
+    warnings.warn(
+        "COMMISSIONS_ROOT env var is not set and the default path does not exist. "
+        "History workbook lookups will fail. Set COMMISSIONS_ROOT in production.",
+        stacklevel=1,
+    )
 
 SHEET_GROUPS = {
     "summary": ["B2B Summary"],
@@ -293,7 +301,7 @@ def resolve_workbook(workbook_id: str) -> Path:
     decoded = _decode_workbook_id(workbook_id)
     if decoded is not None:
         return decoded
-    matches = list(COMMISSIONS_DIR.rglob(workbook_id))
+    matches = sorted(COMMISSIONS_DIR.rglob(workbook_id))
     if not matches:
         raise FileNotFoundError(f"Workbook '{workbook_id}' not found.")
     return matches[0]

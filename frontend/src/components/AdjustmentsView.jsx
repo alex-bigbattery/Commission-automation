@@ -15,7 +15,7 @@ const round2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 
 // ---- Field help text (tooltips) ------------------------------------------
 const TIP = {
-  calc: "Calculated Commission — what the system computed automatically from Zoho data, before any accounting decision.",
+  calc: "Calculated Commission — what the system computed automatically from Zoho data (includes pending/unassigned lines), before any accounting decision.",
   final: "Final Commission — what will actually be paid after your accounting decisions are applied.",
   change: "Change — the difference between Calculated and Final commission caused by your decision.",
   needsReview: "Needs Review — this line cannot be finalized until Accounting makes a decision (e.g. assign a salesperson or classify the account).",
@@ -113,6 +113,97 @@ function Tip({ text, children }) {
   );
 }
 
+// ---- Quick-confirm modal (Approve / Exclude) --------------------------------
+function QuickConfirmModal({ action, row, onConfirm, onCancel }) {
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  const isApprove = action === "approve";
+  const color = isApprove ? "var(--bb-emerald)" : "var(--bb-rose)";
+  const title = isApprove ? "Approve Commission Line" : "Exclude Commission Line";
+  const btnLabel = isApprove ? "Confirm Approve" : "Confirm Exclude";
+
+  function handleConfirm() {
+    if (!reason.trim()) { setErr("Please add a reason before continuing."); return; }
+    onConfirm(reason.trim());
+  }
+
+  return (
+    <div className="adj-drawer-backdrop" style={{ alignItems: "center", justifyContent: "center" }}
+         onClick={(e) => e.target === e.currentTarget && onCancel()}>
+      <div className="confirm-modal-card" role="dialog" aria-modal="true">
+        {/* Header */}
+        <div className="confirm-modal-head" style={{ borderLeftColor: color }}>
+          <span className="confirm-modal-title" style={{ color }}>
+            {isApprove ? <IconCheck style={{ width: 18, height: 18 }} /> : <IconAlert style={{ width: 18, height: 18 }} />}
+            {title}
+          </span>
+          <button type="button" className="btn btn-ghost btn-icon" onClick={onCancel}><IconX /></button>
+        </div>
+
+        {/* Line details */}
+        <div className="confirm-modal-body">
+          <div className="confirm-modal-grid">
+            <span>Customer</span>       <strong>{row.customer || "—"}</strong>
+            <span>Sales Order</span>    <strong>{row.sales_order || "—"}</strong>
+            <span>Invoice</span>        <strong>{row.invoice || "—"}</strong>
+            <span>SKU</span>            <strong>{row.sku || "—"}</strong>
+            <span>Item</span>           <strong>{row.item_name || "—"}</strong>
+            <span>Salesperson</span>    <strong>{row.final_commission_assignment || row.system_salesperson || "—"}</strong>
+            <span>Sales Team</span>     <strong>{row.sales_team || "—"}</strong>
+            <span>Calculated Commission</span>
+            <strong style={{ color: "var(--bb-navy-700)" }}>{money(row.system_commission)}</strong>
+            {isApprove ? (
+              <>
+                <span>Final Commission</span>
+                <strong style={{ color: "var(--bb-emerald)" }}>{money(row.final_commission)}</strong>
+              </>
+            ) : (
+              <>
+                <span>Commission after exclusion</span>
+                <strong style={{ color: "var(--bb-rose)" }}>$0.00</strong>
+              </>
+            )}
+          </div>
+
+          {!isApprove && (
+            <div className="confirm-modal-warning">
+              <IconAlert style={{ width: 15, height: 15, flexShrink: 0 }} />
+              This line will be removed from the payable. The workbook must be regenerated to reflect the change.
+            </div>
+          )}
+
+          {/* Reason */}
+          <div className="field" style={{ marginTop: "0.85rem" }}>
+            <label className="field-label">Reason / Notes <span style={{ color: "var(--bb-rose)" }}>*</span></label>
+            <textarea
+              className="input"
+              rows={2}
+              placeholder={isApprove ? "e.g. Verified against Zoho — correct salesperson and amount" : "e.g. Internal account — not commissionable"}
+              value={reason}
+              onChange={(e) => { setReason(e.target.value); setErr(""); }}
+              style={{ resize: "vertical" }}
+            />
+            {err && <span style={{ color: "var(--bb-rose)", fontSize: 12 }}>{err}</span>}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="confirm-modal-foot">
+          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+          <button
+            type="button"
+            className={`btn ${isApprove ? "btn-success" : "btn-danger"}`}
+            onClick={handleConfirm}
+          >
+            {isApprove ? <IconCheck style={{ width: 14, height: 14 }} /> : <IconAlert style={{ width: 14, height: 14 }} />}
+            {btnLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdjustmentsView() {
   const p = prevMonth();
   const [year, setYear] = useState(p.year);
@@ -129,6 +220,7 @@ export default function AdjustmentsView() {
   const [form, setForm] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
   const [confirmSave, setConfirmSave] = useState(false);
+  const [quickConfirm, setQuickConfirm] = useState(null); // { action: "approve"|"exclude", row }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
 
@@ -181,7 +273,7 @@ export default function AdjustmentsView() {
   const totals = useMemo(() => {
     let sys = 0, fin = 0, adj = 0, needs = 0, exc = 0;
     for (const r of rows) {
-      if (!r.pending) sys += r.system_commission || 0;
+      sys += r.system_commission || 0;
       fin += r.final_commission || 0;
       if (r.adjusted) adj += 1;
       if (lineState(r).key === "needs") needs += 1;
@@ -257,6 +349,37 @@ export default function AdjustmentsView() {
       await readJson(await apiFetch(`${API}/adjustments/${id}`, { method: "DELETE" }));
       setStatus("Adjustment removed.");
       closeDrawer();
+      await load();
+    } catch (err) { setError(err); }
+    finally { setLoading(false); }
+  }
+
+  async function handleQuickConfirm(reason) {
+    if (!quickConfirm) return;
+    const { action, row } = quickConfirm;
+    setQuickConfirm(null);
+    setLoading(true); setError("");
+    try {
+      await readJson(await apiFetch(`${API}/adjustments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          period_year: year, period_month: month,
+          line_uid: row.line_uid,
+          sales_order_number: row.sales_order,
+          invoice_number: row.invoice,
+          sku: row.sku,
+          original_salesperson: row.system_salesperson,
+          original_commissionable: row.system_commissionable,
+          original_map: row.map,
+          exclude_flag: action === "exclude",
+          approval_status: action === "approve" ? "approved" : "pending",
+          reason,
+          reviewer: "",
+        }),
+      }));
+      setStatus(action === "approve"
+        ? `Approved: ${row.invoice} · ${row.sku}`
+        : `Excluded: ${row.invoice} · ${row.sku}`);
       await load();
     } catch (err) { setError(err); }
     finally { setLoading(false); }
@@ -484,9 +607,9 @@ export default function AdjustmentsView() {
                           <button type="button" className="btn btn-xs" title="Assign to a salesperson" onClick={() => openEdit(r, { approval_status: "pending" })}>Assign</button>
                           <button type="button" className="btn btn-xs" title="Move to Company Account" onClick={() => openEdit(r, { classification: "company" })}>Company</button>
                           <button type="button" className="btn btn-xs" title="Move to Executive Account" onClick={() => openEdit(r, { classification: "executive" })}>Exec</button>
-                          <button type="button" className="btn btn-xs btn-danger-ghost" title="Exclude from commission" onClick={() => openEdit(r, { exclude_flag: true })}>Exclude</button>
+                          <button type="button" className="btn btn-xs btn-danger-ghost" title="Exclude from commission" onClick={() => setQuickConfirm({ action: "exclude", row: r })}>Exclude</button>
                           <button type="button" className="btn btn-xs" title="Override MAP / discount / amount" onClick={() => openEdit(r)}>Override</button>
-                          <button type="button" className="btn btn-xs btn-success-ghost" title="Approve this line" onClick={() => openEdit(r, { approval_status: "approved" })}>Approve</button>
+                          <button type="button" className="btn btn-xs btn-success-ghost" title="Approve this line" onClick={() => setQuickConfirm({ action: "approve", row: r })}>Approve</button>
                         </div>
                       </td>
                     </tr>
@@ -641,6 +764,16 @@ export default function AdjustmentsView() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ---- Quick confirm modal (Approve / Exclude) ---- */}
+      {quickConfirm && (
+        <QuickConfirmModal
+          action={quickConfirm.action}
+          row={quickConfirm.row}
+          onConfirm={handleQuickConfirm}
+          onCancel={() => setQuickConfirm(null)}
+        />
       )}
 
       {/* ---- Help modal ---- */}
