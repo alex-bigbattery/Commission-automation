@@ -222,8 +222,11 @@ def _read_period_source(year: int, month: int) -> dict:
 def _count_excel_rows(path: Path) -> int:
     if not path.exists():
         return 0
-    frame = pd.read_excel(path, sheet_name=0)
-    return len(frame.index)
+    try:
+        frame = pd.read_excel(path, sheet_name=0)
+        return len(frame.index)
+    except Exception:
+        return 0  # never let a corrupt/locked file 500 the status endpoint
 
 
 _NOTE_PREFIXES = ("LEGACY DIAGNOSTIC", "This sheet is sourced", "Our calculated commission")
@@ -380,7 +383,8 @@ def _frame_to_grid(frame: pd.DataFrame, limit: int = 500) -> dict:
 
 
 def _validate_period(year: int, month: int) -> None:
-    _validate_period(year, month)
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Month must be 1-12.")
     if year < 2015 or year > 2100:
         raise HTTPException(status_code=400, detail="Year must be between 2015 and 2100.")
 
