@@ -1,8 +1,26 @@
 import { supabase } from "./supabase.js";
 
-/** Local dev: `/api` (Vite proxy). Production: set VITE_API_BASE_URL to Render (bypasses Netlify 26s proxy limit). */
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+/** Local dev: `/api` (Vite proxy). Production: set VITE_API_BASE_URL to Render host (no /api suffix). */
+function normalizeApiBase(raw) {
+  let base = (raw || "").trim().replace(/\/$/, "");
+  if (base.endsWith("/api")) {
+    base = base.slice(0, -4);
+  }
+  return base;
+}
+
+const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE_URL);
 const API = API_BASE ? `${API_BASE}/api` : "/api";
+
+function resolveApiUrl(path) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (path.startsWith("/")) {
+    return API_BASE ? `${API_BASE}${path}` : path;
+  }
+  return `${API}/${path}`;
+}
 
 // Optional developer/support contact (email or URL). Set VITE_SUPPORT_CONTACT
 // in the frontend env to turn the "Contact the developer" text into a link.
@@ -90,7 +108,7 @@ function friendlyError(status, rawDetail) {
 }
 
 export async function apiFetch(path, options = {}) {
-  const url = path.startsWith("/") ? path : `${API}/${path}`;
+  const url = resolveApiUrl(path);
   const headers = new Headers(options.headers || {});
 
   if (supabase) {
