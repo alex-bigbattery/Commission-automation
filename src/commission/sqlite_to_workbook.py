@@ -37,6 +37,7 @@ from openpyxl import load_workbook
 from src.commission.line_classification import classify_line_type
 from src.commission.roster import (
     ALL_SHEETS_ORDERED,
+    COMPANY_SHEET,
     NON_SALARIED_SHEETS,
     ROUTING_UNASSIGNED,
     SALESPERSON_FULL_TO_SHEET,
@@ -44,6 +45,9 @@ from src.commission.roster import (
     format_zoho_salesperson,
     resolve_roster_sheet,
     roster_rep_sheet_keys,
+    classify_special_person,
+    is_known_inactive,
+    is_b2c_coupon_rep,
 )
 from src.commission.returns import commissionable_quantity
 from src.commission.workbook_builder_v2 import (
@@ -57,6 +61,11 @@ from src.db.db_utils import date_prefix_expr
 
 
 FREE_SHIPPING_THRESHOLD = 5000.0
+
+# Possible-ticket signal: an invoiced amount this many times above MAP*qty almost
+# always means a mis-keyed ticket/RC order (Accounting example: a $3k item invoiced
+# at $400k). Flag for review only — never auto-exclude (cf_ticket may be empty).
+PRICE_ANOMALY_FACTOR = 5.0
 
 # Fallback commission tiers (discount_rate, salaried_rate, non_salaried_rate),
 # used only if the template's "Table" sheet can't be read.
@@ -256,6 +265,7 @@ class InvoiceLineRecord:
     balance: float
     sales_team: str = ""        # CF.Sales Team from invoice raw_json (B2B / B2C ... / Exe.)
     payment_terms: str = ""     # invoice payment_terms_label (e.g. "Net 30", "Prepayment")
+    ticket_number: str = ""     # CF.Ticket# (cf_ticket) — usually noncommissionable
     carrier: str = ""           # shipment carrier (when shipments are synced)
     ship_charge: float = 0.0    # shipment shipping charge (when shipments are synced)
     has_shipment: bool = False  # True when a shipment record was found for the SO
@@ -268,14 +278,17 @@ class InvoiceLineRecord:
 
 def _load_item_map(conn: DbConnection) -> dict[str, float]:
     """sku -> MAP unit price (items.rate). SKU upper-cased for matching.
-    When duplicates exist, the row with the highest rowid (latest inserted) wins.
+    When a SKU is duplicated across items, the most recently synced row wins
+    (synced_at DESC, item_id DESC as a stable tiebreaker). Portable across
+    SQLite and Postgres (no rowid).
     """
     out: dict[str, float] = {}
     for row in conn.execute(
-        "SELECT sku, rate FROM items WHERE sku IS NOT NULL AND sku != '' ORDER BY sku, rowid DESC"
+        "SELECT sku, rate FROM items WHERE sku IS NOT NULL AND sku != '' "
+        "ORDER BY sku, synced_at DESC, item_id DESC"
     ).fetchall():
         sku = str(row["sku"]).strip().upper()
-        if sku and sku not in out:  # first = highest rowid = most recent
+        if sku and sku not in out:  # first = most recently synced
             out[sku] = float(row["rate"] or 0)
     return out
 
@@ -307,7 +320,17 @@ def _load_invoice_meta_map(conn: DbConnection, year: int, month: int) -> dict[st
                 team = str(f.get("value") or "")
                 break
         terms = str(inv.get("payment_terms_label") or "")
-        out[str(r["invoice_id"])] = {"sales_team": team, "payment_terms": terms}
+        # Ticket# (api_name cf_ticket) — populated tickets are usually
+        # noncommissionable per Accounting. Read top-level first, then hash.
+        ticket = str(inv.get("cf_ticket") or "").strip()
+        if not ticket:
+            cfh = inv.get("custom_field_hash") or {}
+            ticket = str(cfh.get("cf_ticket") or "").strip()
+        out[str(r["invoice_id"])] = {
+            "sales_team": team,
+            "payment_terms": terms,
+            "ticket_number": ticket,
+        }
     return out
 
 
@@ -414,6 +437,7 @@ def _load_invoice_lines_with_context(
             balance=float(r["balance"] or 0),
             sales_team=meta.get("sales_team", ""),
             payment_terms=meta.get("payment_terms", ""),
+            ticket_number=meta.get("ticket_number", ""),
             carrier=ship["carrier"] if ship else "",
             ship_charge=ship["charge"] if ship else 0.0,
             has_shipment=bool(ship),
@@ -621,6 +645,20 @@ def _resolve_sheet(name: str | None) -> str | None:
     return resolve_roster_sheet(name)
 
 
+def _has_ticket_number(rec) -> bool:  # rec: InvoiceLineRecord
+    """True if the invoice carries a Ticket# (cf_ticket custom field).
+
+    Confirmed from Zoho raw data (June 2026): the authoritative source is the
+    invoice custom field ``cf_ticket`` (label "Ticket#"). A populated value means
+    the order is tied to a support/RC ticket, which Accounting says is *usually*
+    noncommissionable even if paid — so this is a REVIEW flag, never an automatic
+    exclusion. Verified that B2B and Exe./Comp. Account invoices do carry tickets
+    (e.g. April 2026 B2B invoice with cf_ticket=571), so the rule is not redundant
+    with CF.Sales Team routing.
+    """
+    return bool((rec.ticket_number or "").strip())
+
+
 def _route_from_zoho(
     full_name: str,
     data_by_sheet: dict[str, SalespersonData],
@@ -696,6 +734,52 @@ def build_salespeople_from_sqlite(
         ar = _ar_status(rec)
         flags: list[str] = list(base_flags)
 
+        # ---- Special-person routing (configurable Company / Executive) ------
+        # Pay based on the Zoho salesperson (per Marshall):
+        #   Company Account (Bruce): route to Company Acct at NORMAL commission;
+        #     Bruce's payout = 20% of that, applied in B2B Summary J13 (not here).
+        #   Executive Account (Marshall/Eric): revenue tracked, commission = 0,
+        #     not payable, kept visible for audit.
+        special = classify_special_person(full_name)
+        auto_cls = ""
+        executive_route = False
+        if special and special.get("category") == "company":
+            flags.append(special["flag"])
+            routing = COMPANY_SHEET
+            sys_sheet = COMPANY_SHEET
+            in_roster = True           # routes to the real Company Acct sheet (not pending)
+            auto_cls = "company"
+        elif special and special.get("category") == "executive":
+            flags.append(special["flag"])
+            in_roster = False
+            routing = ROUTING_UNASSIGNED
+            auto_cls = "executive"
+            executive_route = True
+
+        # ---- Known-inactive / non-B2B names ---------------------------------
+        elif is_known_inactive(full_name):
+            flags.append("KNOWN_INACTIVE")
+            in_roster = False
+            routing = ROUTING_UNASSIGNED
+
+        # ---- B2C coupon-based reps (Dylan Nava, Customer Service) -----------
+        elif is_b2c_coupon_rep(full_name):
+            flags.append("B2C_COUPON_RULE")
+            in_roster = False
+            routing = ROUTING_UNASSIGNED
+
+        # ---- Ticket number detection ----------------------------------------
+        # A populated Ticket# is usually noncommissionable. Per Accounting we
+        # HOLD it out of the payable (pending) for manual review — never pay or
+        # exclude automatically. Released when an adjustment is approved.
+        ticket_hold = _has_ticket_number(rec)
+        if ticket_hold:
+            flags.append("TICKET_NUMBER")
+
+        # Pending unless routed to a real sheet. Executive lines are auto-classified
+        # (not pending) but carry $0 commission and land on no sheet.
+        is_pending = ((not in_roster) or ticket_hold) and not executive_route
+
         # Rule 5 — shipping lines
         if rec.line_type == "shipping":
             if rec.item_total <= 0:
@@ -712,22 +796,29 @@ def build_salespeople_from_sqlite(
                 continue  # free shipping: drop the $0 shipping line
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
             lines.append(_Line(line_uid, rec, section, "shipping", zoho_sp, sys_sheet, routing,
-                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=not in_roster))
+                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, classification=auto_cls))
             continue
 
-        # Rule 4 — $0 non-shipping line (likely a ticket / warranty)
+        # Rule 4 — $0 non-shipping line. Per Accounting these are usually either
+        # a kit component (the kit's K-SKU line carries the price) or a ticket
+        # (non-commissionable). Either way it earns no separate commission.
         if rec.item_total == 0:
+            sku_u = (rec.sku or "").strip().upper()
+            if sku_u.startswith("K"):
+                why = "$0 kit component — price is on the kit line; excluded"
+            else:
+                why = "$0 line — likely kit component or ticket; excluded, verify"
             exceptions.append(ReviewItem(
                 salesperson=sys_sheet,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
                 amount=0.0,
-                reason="$0 line / possible ticket — verify, excluded",
+                reason=why,
             ))
             continue
 
-        if not in_roster:
+        if not in_roster and not special:
             exceptions.append(ReviewItem(
                 salesperson=zoho_sp,
                 invoice_number=rec.invoice_number,
@@ -741,7 +832,7 @@ def build_salespeople_from_sqlite(
         if rec.line_type != "product":
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
             lines.append(_Line(line_uid, rec, "I", "other", zoho_sp, sys_sheet, routing,
-                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=not in_roster))
+                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, classification=auto_cls))
             continue
 
         # Product line — compute MAP, discount, commission rate
@@ -756,11 +847,28 @@ def build_salespeople_from_sqlite(
                 amount=rec.item_total,
                 reason="Missing MAP price — rate may be wrong",
             ))
+        # Possible-ticket / price anomaly: invoiced far above MAP often signals a
+        # mis-keyed ticket/RC order (per Accounting). Flag for review — do NOT
+        # auto-exclude and do NOT auto-hold (cf_ticket is the strong signal; this
+        # is a weaker heuristic that may have false positives on legit big orders).
+        if (map_price > 0 and rec.quantity > 0
+                and rec.item_total > map_price * rec.quantity * PRICE_ANOMALY_FACTOR):
+            flags.append("PRICE_ANOMALY")
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason="Possible ticket / price anomaly — invoiced far above MAP; verify before payout",
+            ))
         # Discount/rate are per-unit (computed on the gross invoiced amount/qty);
         # returns do not change which rate tier applies, only how much qty counts.
         disc = implied_discount(rec.item_total, map_price, rec.quantity)
         rt = rate_type_for(routing if in_roster else "Paul")
         rate = commission_rate(disc, rt, tiers) if map_price > 0 else 0.0
+        if executive_route:
+            rate = 0.0   # Executive Account: revenue tracked, commission = 0
         if ar == "UNPAID":
             flags.append("UNPAID")
             exceptions.append(ReviewItem(
@@ -808,7 +916,7 @@ def build_salespeople_from_sqlite(
         detail.quantity = comm_qty
         lines.append(_Line(line_uid, rec, section, "commissionable", zoho_sp, sys_sheet, routing,
                            map_price, disc, rate, comm_amount, comm_amount * rate,
-                           detail, flags=flags, pending=not in_roster))
+                           detail, flags=flags, pending=is_pending, classification=auto_cls))
 
     # ---- Phase 2: apply manual adjustments (after calc, before export) ----
     adj_map = get_adjustment_map(year, month, db_path=db_path) if apply_adjustments else {}
@@ -852,6 +960,12 @@ def build_salespeople_from_sqlite(
                 ln.detail.commission_rate = commission_rate(d, rt, tiers) if ln.detail.map_price > 0 else 0.0
         if ln.adj_reason:
             ln.detail.reason = ln.adj_reason
+        # Release a held line (e.g. Ticket#) once Accounting approves it, as long
+        # as it now lands on a real sheet and was not excluded. This lets an
+        # approved ticket line flow back into the payable on its rep's sheet.
+        if (ln.approval_status or "").lower() == "approved" and not ln.excluded:
+            if ln.sheet in data_by_sheet:
+                ln.pending = False
 
     # ---- Phase 3: group final lines + per-line audit + totals ----
     audit_rows: list[dict[str, Any]] = []
@@ -934,6 +1048,13 @@ def build_salespeople_from_sqlite(
     )
 
     kpis = _compute_kpis(data_by_sheet, totals_by_sheet, exceptions)
+    # total_commission must reflect the actual Total to Pay (rep + Bruce), NOT the
+    # raw sheet sum — the full Company Acct normal commission is not paid, only
+    # Bruce's 20% of it. Keeps the KPI consistent with Reconciliation / M10.
+    _rep, _company, _bruce, _total = _payout_breakdown(totals_by_sheet)
+    kpis["total_commission"] = _total
+    kpis["company_account_commission"] = _company
+    kpis["bruce_commission"] = _bruce
     kpis["adjusted_lines"] = adjusted_count
     kpis["pending_lines"] = pending_lines
     kpis["pending_revenue"] = pending_revenue
@@ -983,23 +1104,35 @@ def _compute_kpis(
 # --- High-level orchestration ------------------------------------------------
 
 
+def _payout_breakdown(totals_by_sheet: dict[str, float]) -> tuple[float, float, float, float]:
+    """Single source of truth for the payout model (matches B2B Summary template):
+      rep      = sum of roster rep sheets (excludes Company Acct)
+      company  = NORMAL commission on the Company Acct sheet (Bruce's lines)
+      bruce    = 15% of rep + 20% of company   (template K13 = I13 + J13)
+      total    = rep + bruce                    (template M10 = K11 + K13)
+    The full company normal commission is NOT paid directly — it only feeds
+    Bruce's 20%. Returns (rep, company, bruce, total).
+    """
+    reps = [s for s, _ in ALL_SHEETS_ORDERED if s != COMPANY_SHEET]
+    rep = round(sum(totals_by_sheet.get(s, 0.0) for s in reps), 2)
+    company = round(totals_by_sheet.get(COMPANY_SHEET, 0.0), 2)
+    bruce = round(rep * 0.15 + company * 0.20, 2)
+    total = round(rep + bruce, 2)
+    return rep, company, bruce, total
+
+
 def _reconciliation_values(result: GenerationResult) -> dict[str, float]:
     """Engine-computed reconciliation (written as VALUES so checks read 0 on open)."""
-    reps = [s for s, _ in ALL_SHEETS_ORDERED if s != "Company Acct"]
-    rep_commission = round(sum(result.totals_by_sheet.get(s, 0.0) for s in reps), 2)
-    company_commission = round(result.totals_by_sheet.get("Company Acct", 0.0), 2)
-    # Bruce override mirrors the B2B Summary model: 15% of rep + 20% of company.
-    bruce = round(rep_commission * 0.15 + company_commission * 0.20, 2)
-    executive = 0.0  # manual line — never auto-populated
-    total_to_pay = round(rep_commission + company_commission + bruce, 2)
+    rep_commission, company_commission, bruce, total_to_pay = _payout_breakdown(result.totals_by_sheet)
+    executive = 0.0  # Executive Account = revenue tracked, commission 0 (manual line F38 cleared)
     return {
         "rep_commission": rep_commission,
         "company_commission": company_commission,
         "bruce": bruce,
         "executive": executive,
         "total_to_pay": total_to_pay,
-        "check_a": round(rep_commission - rep_commission, 2),                       # sheets vs rep = 0
-        "check_b": round((rep_commission + company_commission + bruce) - total_to_pay, 2),  # = 0
+        "check_a": round(rep_commission - rep_commission, 2),                  # sheets vs rep = 0
+        "check_b": round((rep_commission + bruce) - total_to_pay, 2),          # = 0
     }
 
 

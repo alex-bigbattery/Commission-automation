@@ -42,7 +42,10 @@ function lineState(r) {
   if (appr === "approved") return { key: "approved", label: "Approved", color: "green" };
   if (r.pending) return { key: "needs", label: "Needs Review", color: "yellow" };
   const flags = String(r.flags || "");
-  if (flags.includes("MISSING_MAP") || flags.includes("UNPAID")) return { key: "needs", label: "Needs Review", color: "yellow" };
+  if (flags.includes("MISSING_MAP") || flags.includes("UNPAID") ||
+      flags.includes("PRICE_ANOMALY") || flags.includes("NEGATIVE_BALANCE")) {
+    return { key: "needs", label: "Needs Review", color: "yellow" };
+  }
   return { key: "ready", label: "Ready", color: "gray" };
 }
 
