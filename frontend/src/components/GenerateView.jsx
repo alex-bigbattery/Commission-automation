@@ -298,8 +298,8 @@ export default function GenerateView() {
             <p className="empty-state-title">You haven't generated the {periodLabel} workbook yet</p>
             <p className="empty-state-desc">
               {periodReady
-                ? "Click “Generate Commissions” to build the B2B-style workbook with every salesperson and the summary sheet."
-                : "Sync this month's Zoho data, then click “Generate Commissions”."}
+                ? "Click 'Generate Commissions' to build the B2B-style workbook with every salesperson and the summary sheet."
+                : "Sync this month's Zoho data, then click 'Generate Commissions'."}
             </p>
           </div>
         </section>
@@ -396,7 +396,7 @@ export default function GenerateView() {
       <Banner type="info" icon={IconInfo}>
         The workbook is built with the usual B2B structure (one sheet per salesperson + B2B Summary, with live formulas).
         Commissions are based on the month's invoices; orders from prior months invoiced now go under
-        “prior periods”. Shipping decisions and edge cases appear in <strong>Exceptions to review</strong>.
+        "prior periods". Shipping decisions and edge cases appear in <strong>Exceptions to review</strong>.
       </Banner>
     </div>
   );

@@ -95,9 +95,9 @@ export default function HelpView() {
         <div className="help-steps">
           {[
             ["Pick the month", "On Generate Commissions, choose the Year and Month you're paying."],
-            ["Make sure data is ready", "If it says “No data for this month”, click Sync Zoho and wait (it runs in the background)."],
+            ["Make sure data is ready", "If it says 'No data for this month', click Sync Zoho and wait (it runs in the background)."],
             ["Generate", "Click Generate Commissions. You'll see KPIs and an Exceptions list."],
-            ["Review & adjust", "Go to Adjustments to resolve “Needs Review” lines (assign salesperson, classify, etc.)."],
+            ["Review & adjust", "Go to Adjustments to resolve 'Needs Review' lines (assign salesperson, classify, etc.)."],
             ["Regenerate & download", "Regenerate the workbook and download it. It stays a Draft until pending lines are resolved."],
           ].map(([t, d], i) => (
             <div className="help-step" key={i}>
@@ -135,7 +135,7 @@ export default function HelpView() {
       <Section id="tabs" icon={IconList} title="What each tab does">
         <div className="help-glossary">
           <div><span className="help-term"><IconSparkle /> Generate Commissions</span><p>Pick a month and build the B2B workbook in one click. Shows KPIs, exceptions to review, a preview, and a download button.</p></div>
-          <div><span className="help-term"><IconList /> Adjustments</span><p>The Accounting review screen. Each commission line shows Calculated → Change → Final. Resolve “Needs Review” lines and approve them.</p></div>
+          <div><span className="help-term"><IconList /> Adjustments</span><p>The Accounting review screen. Each commission line shows Calculated → Change → Final. Resolve "Needs Review" lines and approve them.</p></div>
           <div><span className="help-term"><IconAudit /> Audit</span><p>Detailed analysis and validation against the historical workbook. Useful for deep checks.</p></div>
           <div><span className="help-term"><IconHistory /> History</span><p>Browse previous commission workbooks that were completed before.</p></div>
           <div><span className="help-term"><IconCloud /> Zoho Books</span><p>View the operational data exported from Zoho.</p></div>
@@ -155,69 +155,69 @@ export default function HelpView() {
       </Section>
 
       {/* Key concepts */}
-      <Section id=”concepts” icon={IconChart} title=”Key concepts (glossary)”>
-        <div className=”help-glossary”>
-          <div><span className=”help-term”><IconDollar /> Calculated vs Final Commission</span><p><strong>Calculated</strong> is what the system computed automatically. <strong>Final</strong> is what will actually be paid after your accounting decisions. <strong>Change</strong> is the difference.</p></div>
-          <div><span className=”help-term”><IconTruck /> Returned quantity</span><p>Commission is paid only on quantity kept (invoiced − returned). A fully returned line earns <strong>$0</strong>; a partial return is prorated. This runs for every salesperson and every order automatically.</p></div>
-          <div><span className=”help-term”>CF.Sales Team routing</span><p>Lines are routed exactly like Accounting does it — only <strong>B2B</strong> and Exec/Company lines belong in this workbook; B2C lines go to the separate B2C file.</p></div>
-          <div><span className=”help-term”>MAP, discount &amp; rate</span><p>The MAP (list) price drives the discount (1 − revenue/MAP). The discount maps to a commission tier. <strong>Non-salaried reps (Brett, Leslie, Carmen, Garrett) earn the higher tier.</strong></p></div>
-          <div><span className=”help-term”><IconHistory /> Current vs Prior period</span><p>Orders placed in the month count as current; orders from earlier months invoiced now are shown under “prior periods”.</p></div>
-          <div><span className=”help-term”><IconAlert /> Needs Review / Pending</span><p>A line that can't be finalized until you decide something — usually a missing salesperson or an account to classify. Pending lines are held out of totals until resolved.</p></div>
-          <div><span className=”help-term”>Company / Executive Account</span><p>Sales that belong to the house account or an executive, not an individual rep. Classify them in Adjustments.</p></div>
-          <div><span className=”help-term”><IconCheck /> Draft vs Final</span><p>The workbook is a <strong>Draft</strong> while pending lines or missing shipment data exist, and <strong>Final</strong> only once everything is resolved and approved.</p></div>
-          <div><span className=”help-term”>Reconciliation (Check A / Check B)</span><p>Two internal checks that must read <strong>0</strong>: the salesperson sheets add up to the summary, and the components add up to the Total to Pay.</p></div>
+      <Section id="concepts" icon={IconChart} title="Key concepts (glossary)">
+        <div className="help-glossary">
+          <div><span className="help-term"><IconDollar /> Calculated vs Final Commission</span><p><strong>Calculated</strong> is what the system computed automatically. <strong>Final</strong> is what will actually be paid after your accounting decisions. <strong>Change</strong> is the difference.</p></div>
+          <div><span className="help-term"><IconTruck /> Returned quantity</span><p>Commission is paid only on quantity kept (invoiced − returned). A fully returned line earns <strong>$0</strong>; a partial return is prorated. This runs for every salesperson and every order automatically.</p></div>
+          <div><span className="help-term">CF.Sales Team routing</span><p>Lines are routed exactly like Accounting does it — only <strong>B2B</strong> and Exec/Company lines belong in this workbook; B2C lines go to the separate B2C file.</p></div>
+          <div><span className="help-term">MAP, discount &amp; rate</span><p>The MAP (list) price drives the discount (1 − revenue/MAP). The discount maps to a commission tier. <strong>Non-salaried reps (Brett, Leslie, Carmen, Garrett) earn the higher tier.</strong></p></div>
+          <div><span className="help-term"><IconHistory /> Current vs Prior period</span><p>Orders placed in the month count as current; orders from earlier months invoiced now are shown under "prior periods".</p></div>
+          <div><span className="help-term"><IconAlert /> Needs Review / Pending</span><p>A line that can't be finalized until you decide something — usually a missing salesperson or an account to classify. Pending lines are held out of totals until resolved.</p></div>
+          <div><span className="help-term">Company / Executive Account</span><p>Sales that belong to the house account or an executive, not an individual rep. Classify them in Adjustments.</p></div>
+          <div><span className="help-term"><IconCheck /> Draft vs Final</span><p>The workbook is a <strong>Draft</strong> while pending lines or missing shipment data exist, and <strong>Final</strong> only once everything is resolved and approved.</p></div>
+          <div><span className="help-term">Reconciliation (Check A / Check B)</span><p>Two internal checks that must read <strong>0</strong>: the salesperson sheets add up to the summary, and the components add up to the Total to Pay.</p></div>
         </div>
       </Section>
 
       {/* Special rules confirmed by Accounting */}
-      <Section id=”special-rules” icon={IconAlert} title=”Special rules (confirmed by Accounting — June 2026)”>
-        <div className=”help-glossary”>
+      <Section id="special-rules" icon={IconAlert} title="Special rules (confirmed by Accounting — June 2026)">
+        <div className="help-glossary">
           <div>
-            <span className=”help-term”>Bruce Taylor — Company Account</span>
-            <p>Lines where Zoho shows <strong>Bruce Taylor</strong> as salesperson go to <em>Company Account</em>. Bruce has a special arrangement and is <strong>not paid direct commissions</strong> from invoices marked as Company Account. These lines appear as <span className=”badge badge-yellow”>Needs Review</span> and must be classified manually each month.</p>
+            <span className="help-term">Bruce Taylor — Company Account</span>
+            <p>Lines where Zoho shows <strong>Bruce Taylor</strong> as salesperson go to <em>Company Account</em>. Bruce has a special arrangement and is <strong>not paid direct commissions</strong> from invoices marked as Company Account. These lines appear as <span className="badge badge-yellow">Needs Review</span> and must be classified manually each month.</p>
           </div>
           <div>
-            <span className=”help-term”>Marshall Neipert — Executive Account</span>
+            <span className="help-term">Marshall Neipert — Executive Account</span>
             <p>Lines where Zoho shows <strong>Marshall Neipert</strong> go to <em>Executive Account</em> and require review. Any exception commission for an executive account must be approved by <strong>Marshall</strong> himself.</p>
           </div>
           <div>
-            <span className=”help-term”>Inactive / Non-B2B names</span>
+            <span className="help-term">Inactive / Non-B2B names</span>
             <p>The following names are no longer active B2B reps and will <strong>never auto-assign</strong>: BB Affiliate Investment, Dmitry Gorobets, Michael Northcutt, Joseph Mohney, Jessica Key, Kara Wagner, Alexis McCarthy, River Michelle Harrington, Ryan Murphy. If they appear, the line is flagged for manual review.</p>
           </div>
           <div>
-            <span className=”help-term”>Ticket numbers → usually not commissionable</span>
+            <span className="help-term">Ticket numbers → usually not commissionable</span>
             <p>If an invoice has a <strong>Ticket#</strong> (the Zoho <code>cf_ticket</code> custom field) populated, the line is <strong>held for review</strong> because tickets are usually not commissionable even if paid. Accounting makes the final call — the system does not auto-exclude.</p>
           </div>
           <div>
-            <span className=”help-term”>B2C non-commissionable = primary ticket filter</span>
-            <p>The main way tickets stay out of payable is the <strong>CF.Sales Team = “B2C - RC Team (No Commissionable)”</strong> tag — those never enter the B2B workbook. The Ticket# field is a <em>secondary</em> catch, because reps sometimes forget to fill the ticket number.</p>
+            <span className="help-term">B2C non-commissionable = primary ticket filter</span>
+            <p>The main way tickets stay out of payable is the <strong>CF.Sales Team = "B2C - RC Team (No Commissionable)"</strong> tag — those never enter the B2B workbook. The Ticket# field is a <em>secondary</em> catch, because reps sometimes forget to fill the ticket number.</p>
           </div>
           <div>
-            <span className=”help-term”>Possible ticket / price anomaly</span>
+            <span className="help-term">Possible ticket / price anomaly</span>
             <p>Because Ticket# is sometimes left blank, the system also flags a line as <strong>Possible ticket</strong> when the invoiced amount is far above the MAP (e.g. a $3k item invoiced at $400k). This is a <em>review flag only</em> — never an automatic exclusion.</p>
           </div>
           <div>
-            <span className=”help-term”>Kits and $0 lines</span>
+            <span className="help-term">Kits and $0 lines</span>
             <p>SKUs starting with <strong>K</strong> are kits: one bundled price carries the commission. The <strong>$0 component lines</strong> inside a kit (or $0 ticket lines) earn <strong>no separate commission</strong> — they are excluded and shown in the audit for reference.</p>
           </div>
           <div>
-            <span className=”help-term”>Payment confirmation (e.g. SolarGuysPro)</span>
+            <span className="help-term">Payment confirmation (e.g. SolarGuysPro)</span>
             <p>Lines on unpaid invoices, or payments that can't be tied to a quote/order, are flagged <strong>Confirm payment before payout</strong>. These stay in review until Accounting confirms the payment applies.</p>
           </div>
           <div>
-            <span className=”help-term”>Missing-MAP lines (monitored)</span>
-            <p>Lines whose SKU has <strong>no MAP</strong> (often custom/”Miscellaneous” or ticket lines) can't be priced, so they earn <strong>$0 commission</strong> by default. They're <em>monitored</em> as a possible custom/ticket risk; most are already held or excluded by the B2C, Exe./Comp., $0-line, or roster rules. If future missing-MAP <em>payable</em> exposure becomes material, Accounting can enable a dedicated review flag.</p>
+            <span className="help-term">Missing-MAP lines (monitored)</span>
+            <p>Lines whose SKU has <strong>no MAP</strong> (often custom/"Miscellaneous" or ticket lines) can't be priced, so they earn <strong>$0 commission</strong> by default. They're <em>monitored</em> as a possible custom/ticket risk; most are already held or excluded by the B2C, Exe./Comp., $0-line, or roster rules. If future missing-MAP <em>payable</em> exposure becomes material, Accounting can enable a dedicated review flag.</p>
           </div>
           <div>
-            <span className=”help-term”>Dylan Nava / Customer Service — B2C coupon rule</span>
+            <span className="help-term">Dylan Nava / Customer Service — B2C coupon rule</span>
             <p>These reps have a coupon-based commission rule. <strong>B2C-RC Team coupon = commissionable.</strong> B2C-Web Marketing coupon = not commissionable. Orders without a coupon = organic sales. These lines do <em>not</em> go into the standard B2B payable — they require coupon verification before being approved.</p>
           </div>
           <div>
-            <span className=”help-term”>Exe./Comp. Account default</span>
+            <span className="help-term">Exe./Comp. Account default</span>
             <p>Invoices tagged <em>Exe./Comp. Account</em> in Zoho are <strong>excluded from payable by default</strong> unless Accounting manually approves them. They always appear in the Needs Review queue.</p>
           </div>
           <div>
-            <span className=”help-term”>Roster changes</span>
+            <span className="help-term">Roster changes</span>
             <p>New reps should be added to the roster <strong>on their date of hire</strong>. Contact <strong>Bruce Taylor</strong> to add a new salesperson. The AR employee makes classification calls; escalate to Honey for unusual cases.</p>
           </div>
         </div>
@@ -230,7 +230,7 @@ export default function HelpView() {
           <div><span className="help-term">One sheet per salesperson</span><p>The detail lines (current + prior), with Payment Terms, Shipment info, MAP, discount and commission — the live formulas Jennifer expects.</p></div>
           <div><span className="help-term">Adjustments Audit</span><p>Every line with <em>System → Adjustment → Final</em>, plus quantities, returns and Suggested Action — the full audit trail.</p></div>
           <div><span className="help-term">Reconciliation</span><p>Engine-computed values with Check A and Check B (both must be 0), shown live.</p></div>
-          <div><span className="help-term">B2B Payable vs Jennifer</span><p>The authoritative comparison — “Our Commission” comes from the same engine as the payable workbook, lined up against Jennifer's numbers.</p></div>
+          <div><span className="help-term">B2B Payable vs Jennifer</span><p>The authoritative comparison — "Our Commission" comes from the same engine as the payable workbook, lined up against Jennifer's numbers.</p></div>
           <div><span className="help-term">R_SO / R_INV / R_SH / R_LP</span><p>Reference data for the month (sales orders, invoices, shipments, the MAP price list used).</p></div>
           <div><span className="help-term">Legacy … (Diagnostic Only)</span><p>The old diagnostic sheets, kept for reference. <strong>Do not use them for payment</strong> — each one says so in its first cell.</p></div>
         </div>
@@ -257,8 +257,8 @@ export default function HelpView() {
       {/* Troubleshooting */}
       <Section id="trouble" icon={IconAlert} title="Troubleshooting & common messages">
         <div className="help-glossary">
-          <div><span className="help-term">“The server took too long” / timeout</span><p>The server may be waking up or busy syncing. Wait a minute and click <strong>Retry</strong>. The first action after idle can take 1–2 minutes.</p></div>
-          <div><span className="help-term">“No data for this month”</span><p>Click <strong>Sync Zoho</strong> and wait for it to finish, then Generate.</p></div>
+          <div><span className="help-term">"The server took too long" / timeout</span><p>The server may be waking up or busy syncing. Wait a minute and click <strong>Retry</strong>. The first action after idle can take 1–2 minutes.</p></div>
+          <div><span className="help-term">"No data for this month"</span><p>Click <strong>Sync Zoho</strong> and wait for it to finish, then Generate.</p></div>
           <div><span className="help-term">Sync seems to run forever</span><p>It runs in the background and the screen polls it. Big syncs take a few minutes; you can keep working and check back.</p></div>
           <div><span className="help-term">Shipment data missing</span><p>If the banner says shipments aren't synced, the workbook stays Draft. Sync shipments, then regenerate.</p></div>
           <div><span className="help-term">Numbers differ from Jennifer</span><p>Expected — the difference is the manual-judgment items (reassignments, special discounts). Resolve them in Adjustments; the <em>B2B Payable vs Jennifer</em> sheet shows exactly where.</p></div>
@@ -276,7 +276,7 @@ export default function HelpView() {
         <details className="help-faq"><summary>Can I re-run a month safely?</summary><p>Yes. Generation is repeatable; your saved adjustments are re-applied each time.</p></details>
         <details className="help-faq"><summary>Why is the workbook marked DRAFT?</summary><p>Because there are still pending/unassigned lines, missing shipment data, or unapproved adjustments. Resolve them and it turns FINAL.</p></details>
         <details className="help-faq"><summary>Where do returns come from?</summary><p>From the Sales Order's returned quantity in Zoho. Commission is netted automatically for every line.</p></details>
-        <details className="help-faq"><summary>Which sheet is the source of truth?</summary><p>The per-salesperson sheets + B2B Summary in the generated workbook, and the “B2B Payable vs Jennifer” sheet. Legacy sheets are diagnostic only.</p></details>
+        <details className="help-faq"><summary>Which sheet is the source of truth?</summary><p>The per-salesperson sheets + B2B Summary in the generated workbook, and the "B2B Payable vs Jennifer" sheet. Legacy sheets are diagnostic only.</p></details>
       </Section>
 
       <p className="help-footer text-faint">

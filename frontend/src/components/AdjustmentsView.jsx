@@ -27,8 +27,8 @@ const TIP = {
   reviewStatus: "Review Status — Pending (not decided), Approved (ready to pay), or Rejected.",
   reason: "Reason / Notes — required. Explains why this adjustment was made, for the audit trail.",
   assign: "Assign to Salesperson — credit this line to a specific salesperson.",
-  zohoSp: "Original Zoho Salesperson — exactly as Zoho recorded on the order (never replaced with “unassigned”).",
-  finalAssign: "Final Commission Assignment — who/what receives commission after Accounting review. “Pending” until classified or assigned.",
+  zohoSp: "Original Zoho Salesperson — exactly as Zoho recorded on the order (never replaced with 'unassigned').",
+  finalAssign: "Final Commission Assignment — who/what receives commission after Accounting review. 'Pending' until classified or assigned.",
   acctCat: "Accounting Category — Company Account or Executive Account when the line was moved off a rep.",
 };
 
@@ -395,7 +395,7 @@ export default function AdjustmentsView() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ year, month }),
       }));
-      setStatus(`Workbook regenerated: ${d.report_id} (includes the “Adjustments Audit” sheet).`);
+      setStatus(`Workbook regenerated: ${d.report_id} (includes the "Adjustments Audit" sheet).`);
     } catch (err) { setError(err); }
     finally { setLoading(false); }
   }
@@ -621,7 +621,7 @@ export default function AdjustmentsView() {
                 {filtered.length === 0 && !loading && (
                   <tr><td colSpan={12}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
                     <p className="empty-state-title">Nothing to review here</p>
-                    <p className="empty-state-desc">Try the “All lines” chip or change the filters.</p></div></td></tr>
+                    <p className="empty-state-desc">Try the "All lines" chip or change the filters.</p></div></td></tr>
                 )}
               </tbody>
             </table>
@@ -790,7 +790,7 @@ export default function AdjustmentsView() {
             <div className="help-body">
               <p><strong>What this screen is for.</strong> It lets Accounting review each commission line the system calculated automatically and make the final decisions before the workbook is paid out.</p>
               <p><strong>Calculated Commission</strong> is what the system computed from Zoho data. <strong>Final Commission</strong> is what will actually be paid after your decisions. <strong>Change</strong> is the difference between them.</p>
-              <p><strong>Original Zoho Salesperson</strong> always shows who Zoho says owns the sale (e.g. Bruce Taylor, Marshall Neipert). It is never replaced with “unassigned.”</p>
+              <p><strong>Original Zoho Salesperson</strong> always shows who Zoho says owns the sale (e.g. Bruce Taylor, Marshall Neipert). It is never replaced with "unassigned."</p>
               <p><strong>Final Commission Assignment</strong> is who/what will be paid after your review. Lines for salespeople <em>not on the approved B2B roster</em> stay <strong>Pending</strong> with $0 final commission until you classify or assign them.</p>
               <p><strong>Needs Review</strong> means a line can't be finalized until you decide something — missing Zoho salesperson, non-roster salesperson, or Company/Executive classification.</p>
               <ul>
