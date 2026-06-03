@@ -472,9 +472,17 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
         del wb[name]
     ws = wb.create_sheet(name)
 
+    from src.commission.roster import issue_found as roster_issue, suggested_action as roster_action
+
     headers = [
-        ("Pending", "pending"), ("Suggested Action", "__action"),
-        ("Salesperson", "salesperson"), ("Sales Team", "sales_team"),
+        ("Pending", "pending"),
+        ("Original Zoho Salesperson", "original_zoho_salesperson"),
+        ("Final Commission Assignment", "final_commission_assignment"),
+        ("Accounting Category", "accounting_category"),
+        ("Issue Found", "issue_found"),
+        ("Suggested Action", "__action"),
+        ("System Salesperson", "system_salesperson"),
+        ("Sales Team", "sales_team"),
         ("Sales Order", "sales_order"), ("Invoice", "invoice"), ("SKU", "sku"),
         ("Qty Ordered", "qty_ordered"), ("Qty Shipped", "qty_shipped"),
         ("Qty Invoiced", "qty_invoiced"), ("Qty Returned", "qty_returned"),
@@ -489,22 +497,7 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
     ]
 
     def suggested_action(row: dict) -> str:
-        flags = str(row.get("flags") or "")
-        if "FULLY_RETURNED" in flags:
-            return "Returned in full — commission $0 (verify)"
-        if "PARTIALLY_RETURNED" in flags:
-            return "Partial return — commission on kept qty"
-        if row.get("pending"):
-            return "Assign salesperson / classify (Company or Executive)"
-        if row.get("excluded"):
-            return "Excluded — verify reason"
-        if "UNPAID" in flags:
-            return "Confirm payment before payout"
-        if "MISSING_MAP" in flags:
-            return "Set MAP / discount"
-        if row.get("adjusted"):
-            return "Adjusted — review"
-        return ""
+        return roster_action(row) or ("" if not row.get("adjusted") else "Adjusted — review")
 
     # Sort so the rows needing attention float to the top.
     def sort_key(row: dict):
@@ -512,9 +505,16 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
             0 if row.get("pending") else 1,
             0 if str(row.get("flags") or "") else 1,
             0 if row.get("adjusted") else 1,
-            str(row.get("salesperson") or ""),
+            str(row.get("final_commission_assignment") or row.get("salesperson") or ""),
         )
     ordered = sorted(audit_rows, key=sort_key)
+
+    # Backfill issue/suggested for rows generated before enrich_audit_fields existed.
+    for row in ordered:
+        if not row.get("issue_found"):
+            row["issue_found"] = roster_issue(row)
+        if not row.get("suggested_action"):
+            row["suggested_action"] = roster_action(row)
 
     fill = PatternFill("solid", fgColor="1F4E78")
     font = Font(bold=True, color="FFFFFF")
@@ -531,7 +531,12 @@ def _write_adjustments_audit_sheet(wb, audit_rows: list[dict]) -> None:
     warn_fill = PatternFill("solid", fgColor="FCE8E6")
     for r, row in enumerate(ordered, start=2):
         for c, (_label, key) in enumerate(headers, start=1):
-            v = suggested_action(row) if key == "__action" else row.get(key)
+            if key == "__action":
+                v = suggested_action(row)
+            elif key == "issue_found":
+                v = row.get("issue_found") or roster_issue(row)
+            else:
+                v = row.get(key)
             if isinstance(v, bool):
                 v = "Yes" if v else ""
             cell = ws.cell(r, c, v)

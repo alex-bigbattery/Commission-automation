@@ -107,9 +107,11 @@ def build_reconciliation_frames(
 
     # --- 2) Payable detail (exact lines that earn commission) ---
     pay_cols = [
+        "original_zoho_salesperson", "final_commission_assignment", "accounting_category",
         "salesperson", "sales_order", "invoice", "sku", "customer",
         "qty_invoiced", "qty_returned", "qty_commissionable", "return_status",
         "revenue", "final_commissionable", "final_rate", "final_commission",
+        "issue_found", "suggested_action",
     ]
     payable = [
         a for a in audit_rows
@@ -126,10 +128,8 @@ def build_reconciliation_frames(
             return "Executive Account Review"
         if a.get("excluded"):
             return "Excluded by Accounting"
-        if a.get("salesperson") == "(unassigned)":
-            return "Not Payable Yet (unassigned)"
-        if a.get("pending"):
-            return "Pending Review"
+        if a.get("pending") or a.get("final_commission_assignment") == "Pending":
+            return "Pending Review (not on roster or awaiting decision)"
         return ""
 
     excl_rows = []
@@ -139,7 +139,12 @@ def build_reconciliation_frames(
             continue
         excl_rows.append({
             "Category": cat,
-            "Salesperson": a.get("salesperson"),
+            "Original Zoho Salesperson": a.get("original_zoho_salesperson"),
+            "Final Commission Assignment": a.get("final_commission_assignment"),
+            "Accounting Category": a.get("accounting_category"),
+            "Issue Found": a.get("issue_found"),
+            "Suggested Action": a.get("suggested_action"),
+            "Salesperson": a.get("final_commission_assignment") or a.get("salesperson"),
             "Sales Team": a.get("sales_team"),
             "Sales Order": a.get("sales_order"),
             "Invoice": a.get("invoice"),

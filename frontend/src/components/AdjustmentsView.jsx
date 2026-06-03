@@ -27,6 +27,9 @@ const TIP = {
   reviewStatus: "Review Status — Pending (not decided), Approved (ready to pay), or Rejected.",
   reason: "Reason / Notes — required. Explains why this adjustment was made, for the audit trail.",
   assign: "Assign to Salesperson — credit this line to a specific salesperson.",
+  zohoSp: "Original Zoho Salesperson — exactly as Zoho recorded on the order (never replaced with “unassigned”).",
+  finalAssign: "Final Commission Assignment — who/what receives commission after Accounting review. “Pending” until classified or assigned.",
+  acctCat: "Accounting Category — Company Account or Executive Account when the line was moved off a rep.",
 };
 
 // ---- Derived line state / issue / action ---------------------------------
@@ -44,33 +47,49 @@ function lineState(r) {
 }
 
 function issueFound(r) {
+  if (r.issue_found) return r.issue_found;
   const flags = String(r.flags || "");
   const team = String(r.sales_team || "").toLowerCase();
   if (flags.includes("FULLY_RETURNED")) return "Fully returned — not commissionable";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partially returned";
   if (r.pending && (team.includes("exe") || team.includes("comp")))
     return "Company / Executive account needs classification";
+  if (r.pending && (r.original_zoho_salesperson === "(missing in Zoho)"))
+    return "Missing salesperson in Zoho";
+  if (r.pending && flags.includes("UNASSIGNED"))
+    return "Salesperson not in commission roster";
   if (r.pending) return "Missing salesperson assignment";
   if (flags.includes("MISSING_MAP")) return "MAP / discount difference";
   if (flags.includes("UNPAID")) return "Invoice not paid yet";
   if (r.block === "shipping") return "Shipping line";
   if (r.section === "II") return "Prior-period order";
-  if (flags.includes("UNASSIGNED")) return "Manual review required";
   return "";
 }
 
 function suggestedAction(r) {
+  if (r.suggested_action) return r.suggested_action;
   const team = String(r.sales_team || "").toLowerCase();
   const flags = String(r.flags || "");
   if (flags.includes("FULLY_RETURNED")) return "Returned — verify $0 commission";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partial return — verify kept qty";
   if (r.pending && (team.includes("exe") || team.includes("comp"))) return "Classify as Company / Executive";
+  if (r.pending && (r.original_zoho_salesperson === "(missing in Zoho)")) return "Assign salesperson";
+  if (r.pending && flags.includes("UNASSIGNED"))
+    return "Classify as Company Account, Executive Account, Bruce Commission, assign to a salesperson, or add to roster";
   if (r.pending) return "Assign salesperson";
   if (String(r.flags || "").includes("MISSING_MAP")) return "Review MAP / discount";
   if (String(r.flags || "").includes("UNPAID")) return "Confirm payment, then approve";
   if (r.excluded) return "Review exclusion";
   if ((r.approval_status || "").toLowerCase() === "approved") return "—";
   return "Approve if correct";
+}
+
+function finalAssignment(r) {
+  return r.final_commission_assignment || r.salesperson || "—";
+}
+
+function zohoSalesperson(r) {
+  return r.original_zoho_salesperson || r.system_salesperson || "—";
 }
 
 const VIEWS = [
@@ -124,7 +143,10 @@ export default function AdjustmentsView() {
 
   const salespeopleOptions = useMemo(() => {
     const set = new Set(roster);
-    rows.forEach((r) => { if (r.salesperson) set.add(r.salesperson); });
+    rows.forEach((r) => {
+      if (finalAssignment(r)) set.add(finalAssignment(r));
+      if (zohoSalesperson(r)) set.add(zohoSalesperson(r));
+    });
     return [...set].sort();
   }, [rows, roster]);
   const teamOptions = useMemo(() => [...new Set(rows.map((r) => r.sales_team).filter(Boolean))].sort(), [rows]);
@@ -139,7 +161,7 @@ export default function AdjustmentsView() {
       if (view === "approved" && st !== "approved") return false;
       if (view === "excluded" && st !== "excluded") return false;
       if (view === "company_exec" && !(st === "company" || st === "executive")) return false;
-      if (filters.salesperson && r.salesperson !== filters.salesperson) return false;
+      if (filters.salesperson && finalAssignment(r) !== filters.salesperson && zohoSalesperson(r) !== filters.salesperson) return false;
       if (filters.sales_team && r.sales_team !== filters.sales_team) return false;
       if (filters.issue && issueFound(r) !== filters.issue) return false;
       if (filters.action && suggestedAction(r) !== filters.action) return false;
@@ -263,10 +285,11 @@ export default function AdjustmentsView() {
 
   function salespersonAfter() {
     if (!form) return "";
-    if (form.exclude_flag) return "— (excluded)";
-    if (form.classification === "company") return "Company Acct";
-    if (form.classification === "executive") return "Executive";
-    return form.adjusted_salesperson || editing.salesperson;
+    if (form.exclude_flag) return "Excluded";
+    if (form.classification === "company") return "Company Account";
+    if (form.classification === "executive") return "Executive Account";
+    if (form.adjusted_salesperson) return form.adjusted_salesperson;
+    return finalAssignment(editing);
   }
 
   const estFinal = estimateFinal();
@@ -360,7 +383,7 @@ export default function AdjustmentsView() {
 
           <div className="row" style={{ flexWrap: "wrap", gap: "0.6rem", alignItems: "flex-end" }}>
             <div className="field" style={{ minWidth: 150, flex: "1 1 150px" }}>
-              <label className="field-label">Salesperson</label>
+              <label className="field-label">Assignment / Zoho name</label>
               <select className="select" value={filters.salesperson} onChange={(e) => setFilters({ ...filters, salesperson: e.target.value })}>
                 <option value="">All</option>
                 {salespeopleOptions.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -422,7 +445,8 @@ export default function AdjustmentsView() {
               <thead>
                 <tr>
                   <th>Status</th>
-                  <th>Salesperson</th>
+                  <th><Tip text={TIP.zohoSp}>Original Zoho</Tip></th>
+                  <th><Tip text={TIP.finalAssign}>Final Assignment</Tip></th>
                   <th>Customer</th>
                   <th>SO / Invoice</th>
                   <th>Item</th>
@@ -440,7 +464,8 @@ export default function AdjustmentsView() {
                   return (
                     <tr key={r.line_uid + i} className={lineState(r).key === "needs" ? "row-needs" : ""}>
                       <td>{badge(r)}</td>
-                      <td>{r.salesperson}</td>
+                      <td className="cell-trunc" title={zohoSalesperson(r)}>{zohoSalesperson(r)}</td>
+                      <td>{finalAssignment(r)}</td>
                       <td className="cell-trunc" title={r.customer}>{r.customer}</td>
                       <td><div>{r.sales_order}</div><div className="text-faint" style={{ fontSize: 11 }}>{r.invoice}</div></td>
                       <td className="cell-trunc" title={r.item_name}>{r.sku}</td>
@@ -465,7 +490,7 @@ export default function AdjustmentsView() {
                   );
                 })}
                 {filtered.length === 0 && !loading && (
-                  <tr><td colSpan={11}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
+                  <tr><td colSpan={12}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
                     <p className="empty-state-title">Nothing to review here</p>
                     <p className="empty-state-desc">Try the “All lines” chip or change the filters.</p></div></td></tr>
                 )}
@@ -498,7 +523,11 @@ export default function AdjustmentsView() {
                   <div><span>Invoice</span><strong>{editing.invoice || "—"}</strong></div>
                   <div><span>Item</span><strong title={editing.item_name}>{editing.sku || "—"}</strong></div>
                   <div><span>Sales Team</span><strong>{editing.sales_team || "—"}</strong></div>
-                  <div><span>Current Salesperson</span><strong>{editing.system_salesperson || "—"}</strong></div>
+                  <div><span><Tip text={TIP.zohoSp}>Original Zoho Salesperson</Tip></span><strong>{zohoSalesperson(editing)}</strong></div>
+                  <div><span><Tip text={TIP.finalAssign}>Final Commission Assignment</Tip></span><strong>{finalAssignment(editing)}</strong></div>
+                  {editing.accounting_category && (
+                    <div><span><Tip text={TIP.acctCat}>Accounting Category</Tip></span><strong>{editing.accounting_category}</strong></div>
+                  )}
                   <div><span><Tip text={TIP.calc}>Calculated Commission</Tip></span><strong>{money(editing.system_commission)}</strong></div>
                   <div><span><Tip text={TIP.final}>Final Commission</Tip></span><strong>{money(editing.final_commission)}</strong></div>
                 </div>
@@ -577,7 +606,7 @@ export default function AdjustmentsView() {
                   <div><span>Calculated Commission</span><strong>{money(editing.system_commission)}</strong></div>
                   <div><span>Change</span><strong style={{ color: estChange == null ? "inherit" : estChange < 0 ? "var(--bb-rose)" : estChange > 0 ? "var(--bb-emerald)" : "inherit" }}>{estChange == null ? "recalculated on Save" : money(estChange)}</strong></div>
                   <div><span>Final Commission</span><strong>{estFinal == null ? "recalculated on Save" : money(estFinal)}</strong></div>
-                  <div><span>Salesperson</span><strong>{editing.system_salesperson} → {salespersonAfter()}</strong></div>
+                  <div><span>Final Assignment</span><strong>{finalAssignment(editing)} → {salespersonAfter()}</strong></div>
                 </div>
               </div>
             </div>
@@ -622,9 +651,11 @@ export default function AdjustmentsView() {
             <div className="help-body">
               <p><strong>What this screen is for.</strong> It lets Accounting review each commission line the system calculated automatically and make the final decisions before the workbook is paid out.</p>
               <p><strong>Calculated Commission</strong> is what the system computed from Zoho data. <strong>Final Commission</strong> is what will actually be paid after your decisions. <strong>Change</strong> is the difference between them.</p>
-              <p><strong>Needs Review</strong> means a line can't be finalized until you decide something — usually a missing salesperson or a Company/Executive account that needs classifying.</p>
+              <p><strong>Original Zoho Salesperson</strong> always shows who Zoho says owns the sale (e.g. Bruce Taylor, Marshall Neipert). It is never replaced with “unassigned.”</p>
+              <p><strong>Final Commission Assignment</strong> is who/what will be paid after your review. Lines for salespeople <em>not on the approved B2B roster</em> stay <strong>Pending</strong> with $0 final commission until you classify or assign them.</p>
+              <p><strong>Needs Review</strong> means a line can't be finalized until you decide something — missing Zoho salesperson, non-roster salesperson, or Company/Executive classification.</p>
               <ul>
-                <li><strong>Assign a salesperson</strong> when a B2B line has no salesperson (or the wrong one).</li>
+                <li><strong>Assign a salesperson</strong> when Zoho has no salesperson or you want to credit a roster rep.</li>
                 <li><strong>Move to Company Account</strong> when the sale belongs to the house account, not an individual rep.</li>
                 <li><strong>Move to Executive Account</strong> when it belongs to an executive/owner account.</li>
                 <li><strong>Exclude a line</strong> when it should not earn commission at all (its Final becomes $0).</li>

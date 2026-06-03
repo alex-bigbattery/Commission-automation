@@ -33,6 +33,7 @@ from src.commission.sqlite_data_source import (
     load_commission_input,
     period_counts,
 )
+from src.commission.roster import roster_rep_sheet_keys
 from src.commission.sqlite_to_workbook import (
     ALL_SHEETS_ORDERED,
     build_salespeople_from_sqlite,
@@ -510,7 +511,7 @@ def commission_exceptions(year: int = Query(...), month: int = Query(...)) -> di
 @app.get("/api/adjustments/roster")
 def adjustments_roster() -> dict:
     """Valid salesperson sheet keys for the reassignment dropdown."""
-    return {"salespeople": [s for s, _ in ALL_SHEETS_ORDERED]}
+    return {"salespeople": roster_rep_sheet_keys()}
 
 
 @app.get("/api/adjustments/lines")
@@ -567,7 +568,7 @@ def adjustments_lines(
         "rows": rows,
         "kpis": result.kpis,
         "totals_by_sheet": result.totals_by_sheet,
-        "roster": [s for s, _ in ALL_SHEETS_ORDERED],
+        "roster": roster_rep_sheet_keys(),
     }
 
 

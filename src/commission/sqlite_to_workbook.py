@@ -35,6 +35,16 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 
 from src.commission.line_classification import classify_line_type
+from src.commission.roster import (
+    ALL_SHEETS_ORDERED,
+    NON_SALARIED_SHEETS,
+    ROUTING_UNASSIGNED,
+    SALESPERSON_FULL_TO_SHEET,
+    enrich_audit_fields,
+    format_zoho_salesperson,
+    resolve_roster_sheet,
+    roster_rep_sheet_keys,
+)
 from src.commission.returns import commissionable_quantity
 from src.commission.workbook_builder_v2 import (
     Block,
@@ -45,37 +55,6 @@ from src.db.connection import DbConnection, get_connection, init_database
 from src.db.adjustments import get_adjustment_map, make_line_uid
 from src.db.db_utils import date_prefix_expr
 
-
-# --- Salesperson catalog -----------------------------------------------------
-
-SALESPERSON_FULL_TO_SHEET: dict[str, str] = {
-    "Paul Perlman": "Paul",
-    "Jose Ayala": "Jose",
-    "Michael Ayala": "Michael",
-    "Jim Sutton": "Jim",
-    "Weston Fields": "Weston",
-    "Brett Bern": "Brett",
-    "Leslie Neipert": "Leslie",
-    "Carmen Daetz": "Carmen",
-    "Garrett Lockhart": "Garrett",
-    "Company Account": "Company Acct",
-    "B2B Company Account": "Company Acct",
-}
-
-NON_SALARIED_SHEETS = frozenset({"Brett", "Leslie", "Carmen", "Garrett"})
-
-ALL_SHEETS_ORDERED = [
-    ("Paul", "Paul Perlman"),
-    ("Jose", "Jose Ayala"),
-    ("Michael", "Michael Ayala"),
-    ("Jim", "Jim Sutton"),
-    ("Weston", "Weston Fields"),
-    ("Brett", "Brett Bern"),
-    ("Leslie", "Leslie Neipert"),
-    ("Carmen", "Carmen Daetz"),
-    ("Garrett", "Garrett Lockhart"),
-    ("Company Acct", "Company Account"),
-]
 
 FREE_SHIPPING_THRESHOLD = 5000.0
 
@@ -608,8 +587,9 @@ class _Line:
     rec: InvoiceLineRecord
     section: str               # "I" | "II"
     block: str                 # "commissionable" | "shipping" | "other"
-    sys_sheet: str             # salesperson sheet from the automated calculation
-    sheet: str                 # final salesperson sheet (after adjustment)
+    zoho_salesperson: str      # Original Zoho salesperson (display only)
+    sys_sheet: str             # roster sheet or Zoho name from automated calculation
+    sheet: str                 # routing sheet key (after adjustment); ROUTING_UNASSIGNED if pending
     sys_map: float
     sys_discount: float
     sys_rate: float
@@ -628,15 +608,22 @@ class _Line:
 
 def _resolve_sheet(name: str | None) -> str | None:
     """Map a salesperson full-name or sheet key to a roster sheet key."""
-    if not name:
-        return None
-    n = str(name).strip()
-    if n in SALESPERSON_FULL_TO_SHEET:
-        return SALESPERSON_FULL_TO_SHEET[n]
-    for s, _ in ALL_SHEETS_ORDERED:
-        if s.lower() == n.lower():
-            return s
-    return None
+    return resolve_roster_sheet(name)
+
+
+def _route_from_zoho(
+    full_name: str,
+    data_by_sheet: dict[str, SalespersonData],
+) -> tuple[str, str, str, bool, list[str]]:
+    """Return zoho_display, sys_sheet, routing_sheet, in_roster, flags."""
+    zoho = format_zoho_salesperson(full_name)
+    roster_sheet = resolve_roster_sheet(full_name)
+    in_roster = roster_sheet is not None and roster_sheet in data_by_sheet
+    flags: list[str] = []
+    if in_roster:
+        return zoho, roster_sheet, roster_sheet, True, flags
+    flags.append("UNASSIGNED")
+    return zoho, zoho, ROUTING_UNASSIGNED, False, flags
 
 
 def build_salespeople_from_sqlite(
@@ -693,12 +680,11 @@ def build_salespeople_from_sqlite(
             continue
 
         full_name = (rec.so_salesperson_name or rec.salesperson_name or "").strip()
-        roster_sheet = SALESPERSON_FULL_TO_SHEET.get(full_name)
-        in_roster = roster_sheet is not None and roster_sheet in data_by_sheet
+        zoho_sp, sys_sheet, routing, in_roster, base_flags = _route_from_zoho(full_name, data_by_sheet)
         line_uid = make_line_uid(rec.invoice_number, rec.sku, rec.salesorder_number)
         section = _section_for(rec, year, month)
         ar = _ar_status(rec)
-        flags: list[str] = []
+        flags: list[str] = list(base_flags)
 
         # Rule 5 — shipping lines
         if rec.line_type == "shipping":
@@ -706,7 +692,7 @@ def build_salespeople_from_sqlite(
                 order_total = order_total_by_so.get(rec.salesorder_number, 0.0)
                 if order_total <= FREE_SHIPPING_THRESHOLD:
                     exceptions.append(ReviewItem(
-                        salesperson=roster_sheet or full_name,
+                        salesperson=sys_sheet,
                         invoice_number=rec.invoice_number,
                         sales_order_number=rec.salesorder_number,
                         sku=rec.sku,
@@ -714,20 +700,15 @@ def build_salespeople_from_sqlite(
                         reason=f"Free shipping under ${int(FREE_SHIPPING_THRESHOLD):,} — reason not given",
                     ))
                 continue  # free shipping: drop the $0 shipping line
-            if in_roster:
-                target = roster_sheet
-            else:
-                target = "(unassigned)"
-                flags.append("UNASSIGNED")
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
-            lines.append(_Line(line_uid, rec, section, "shipping", target, target,
+            lines.append(_Line(line_uid, rec, section, "shipping", zoho_sp, sys_sheet, routing,
                                0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=not in_roster))
             continue
 
         # Rule 4 — $0 non-shipping line (likely a ticket / warranty)
         if rec.item_total == 0:
             exceptions.append(ReviewItem(
-                salesperson=roster_sheet or full_name,
+                salesperson=sys_sheet,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
@@ -737,23 +718,19 @@ def build_salespeople_from_sqlite(
             continue
 
         if not in_roster:
-            flags.append("UNASSIGNED")
             exceptions.append(ReviewItem(
-                salesperson=full_name or "(blank)",
+                salesperson=zoho_sp,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
                 amount=rec.item_total,
-                reason="B2B line, salesperson not in roster — assign manually",
+                reason="Salesperson not in commission roster — classify or assign",
             ))
-            target = "(unassigned)"
-        else:
-            target = roster_sheet
 
         # Other charges (non-product, non-shipping, non-zero)
         if rec.line_type != "product":
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
-            lines.append(_Line(line_uid, rec, "I", "other", target, target,
+            lines.append(_Line(line_uid, rec, "I", "other", zoho_sp, sys_sheet, routing,
                                0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=not in_roster))
             continue
 
@@ -762,7 +739,7 @@ def build_salespeople_from_sqlite(
         if map_price <= 0:
             flags.append("MISSING_MAP")
             exceptions.append(ReviewItem(
-                salesperson=target,
+                salesperson=sys_sheet,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
@@ -772,12 +749,12 @@ def build_salespeople_from_sqlite(
         # Discount/rate are per-unit (computed on the gross invoiced amount/qty);
         # returns do not change which rate tier applies, only how much qty counts.
         disc = implied_discount(rec.item_total, map_price, rec.quantity)
-        rt = rate_type_for(target)
+        rt = rate_type_for(routing if in_roster else "Paul")
         rate = commission_rate(disc, rt, tiers) if map_price > 0 else 0.0
         if ar == "UNPAID":
             flags.append("UNPAID")
             exceptions.append(ReviewItem(
-                salesperson=target,
+                salesperson=sys_sheet,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
@@ -793,14 +770,14 @@ def build_salespeople_from_sqlite(
         if ret_status == "Fully Returned":
             flags.append("FULLY_RETURNED")
             exceptions.append(ReviewItem(
-                salesperson=target, invoice_number=rec.invoice_number,
+                salesperson=sys_sheet, invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
                 reason="Returned quantity fully offsets shipped/invoiced quantity",
             ))
         elif ret_status == "Partially Returned":
             flags.append("PARTIALLY_RETURNED")
             exceptions.append(ReviewItem(
-                salesperson=target, invoice_number=rec.invoice_number,
+                salesperson=sys_sheet, invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
                 reason=f"Partial return: {rec.qty_returned:g} returned — commission on {comm_qty:g}",
             ))
@@ -809,7 +786,7 @@ def build_salespeople_from_sqlite(
         # Write NET-of-returns quantity & amount so the workbook formulas stay self-consistent.
         detail.item_total = comm_amount
         detail.quantity = comm_qty
-        lines.append(_Line(line_uid, rec, section, "commissionable", target, target,
+        lines.append(_Line(line_uid, rec, section, "commissionable", zoho_sp, sys_sheet, routing,
                            map_price, disc, rate, comm_amount, comm_amount * rate,
                            detail, flags=flags, pending=not in_roster))
 
@@ -866,12 +843,25 @@ def build_salespeople_from_sqlite(
                     (sp.current_shipping if ln.section == "I" else sp.prior_shipping).rows.append(ln.detail)
                 else:
                     sp.current_other.rows.append(ln.detail)
+        flags_str = ",".join(ln.flags)
+        audit_extra = enrich_audit_fields(
+            zoho_salesperson=ln.zoho_salesperson,
+            sys_sheet=ln.sys_sheet,
+            sheet=ln.sheet,
+            excluded=ln.excluded,
+            classification=ln.classification,
+            pending=ln.pending,
+            flags=flags_str,
+            block=ln.block,
+            section=ln.section,
+            sales_team=ln.rec.sales_team or "",
+            approval_status=ln.approval_status,
+        )
         audit_rows.append({
             "line_uid": ln.line_uid,
             "period": f"{year}-{month:02d}",
             "sales_team": ln.rec.sales_team,
-            "system_salesperson": ln.sys_sheet,
-            "salesperson": ln.sheet,
+            **audit_extra,
             "sales_order": ln.rec.salesorder_number,
             "invoice": ln.rec.invoice_number,
             "sku": ln.rec.sku,
@@ -891,7 +881,7 @@ def build_salespeople_from_sqlite(
             "revenue": round(ln.rec.item_total, 2),
             "block": ln.block,
             "section": ln.section,
-            "flags": ",".join(ln.flags),
+            "flags": flags_str,
             "map": round(ln.detail.map_price, 2),
             "system_commissionable": round(ln.sys_commissionable, 2),
             "system_rate": round(ln.sys_rate, 4),
