@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-import { KpiCard, Banner, money, num, LoadingNotice } from "./ui.jsx";
+import { KpiCard, Banner, ErrorBanner, money, num, LoadingNotice } from "./ui.jsx";
 import {
   IconSparkle,
   IconSync,
@@ -76,7 +76,7 @@ export default function GenerateView() {
         setPreview({ columns: [], rows: [] });
       }
     } catch (err) {
-      setError(err.message);
+      setError(err);
     } finally {
       setLoadingPeriod(false);
     }
@@ -112,7 +112,7 @@ export default function GenerateView() {
       );
       setPreview({ columns: data.columns || [], rows: data.rows || [] });
     } catch (err) {
-      setError(err.message);
+      setError(err);
     }
   }
 
@@ -132,7 +132,7 @@ export default function GenerateView() {
       await refresh();
       setTab(data.exception_count > 0 ? "exceptions" : "preview");
     } catch (err) {
-      setError(err.message);
+      setError(err);
       setStatus("");
     } finally {
       setLoading(false);
@@ -142,18 +142,34 @@ export default function GenerateView() {
   async function syncLatest() {
     setSyncing(true);
     setError("");
-    setStatus("Syncing latest Zoho data…");
+    setStatus("Syncing latest Zoho data… this runs in the background and can take a few minutes.");
     try {
+      // Kick off the sync (returns immediately — no gateway timeout).
       await readJson(
         await apiFetch(`${API}/sync/incremental`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         })
       );
-      setStatus("Zoho data synced.");
-      await refresh();
+      // Poll the background job until it finishes (keeps the server awake too).
+      let finished = false;
+      for (let i = 0; i < 240 && !finished; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const st = await readJson(await apiFetch(`${API}/sync/incremental/status`));
+        if (st.status && st.status !== "running") {
+          finished = true;
+          if (st.status === "failed") {
+            throw new Error((st.errors && st.errors.length ? st.errors.join("; ") : "Sync failed."));
+          }
+          setStatus("Zoho data synced.");
+          await refresh();
+        }
+      }
+      if (!finished) {
+        setStatus("Sync is still running in the background — check back in a moment.");
+      }
     } catch (err) {
-      setError(err.message);
+      setError(err);
       setStatus("");
     } finally {
       setSyncing(false);
@@ -165,7 +181,7 @@ export default function GenerateView() {
     try {
       await downloadApi(`${API}/downloads/reports/${encodeURIComponent(summary.report_id)}`, summary.report_id);
     } catch (err) {
-      setError(err.message);
+      setError(err);
     }
   }
 
@@ -245,7 +261,7 @@ export default function GenerateView() {
         <Banner type="success" icon={IconCheck}>{status}</Banner>
       )}
       {error && (
-        <Banner type="danger" icon={IconAlert}>{error}</Banner>
+        <ErrorBanner error={error} onRetry={refresh} />
       )}
       {!periodReady && !loadingPeriod && (
         <Banner type="warning" icon={IconAlert}>

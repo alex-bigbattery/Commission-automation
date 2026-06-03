@@ -484,21 +484,43 @@ def load_period_dataframes(year: int, month: int, db_path: Path | None = None) -
         conn.close()
 
 
-def has_period_data(year: int, month: int, db_path: Path | None = None) -> bool:
-    """True when SQLite has sales orders and invoices for the month (shipments optional)."""
-    frames = load_period_dataframes(year, month, db_path)
-    return not frames.sales_orders.empty and not frames.invoices.empty
+def _count_in_month(conn, table: str, date_col: str, year: int, month: int) -> int:
+    """Lightweight COUNT(*) for a month — avoids loading/parsing every raw_json row."""
+    start, end = month_bounds(year, month)
+    expr = date_prefix_expr(date_col, conn.postgres)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS c FROM {table} WHERE {expr} >= ? AND {expr} <= ?",
+        (start, end),
+    ).fetchone()
+    return int(row["c"] or 0)
 
 
 def period_counts(year: int, month: int, db_path: Path | None = None) -> dict[str, int]:
-    frames = load_period_dataframes(year, month, db_path)
-    return {
-        "sales_orders": len(frames.sales_orders),
-        "invoices": len(frames.invoices),
-        "shipments": len(frames.shipments),
-        "items": len(frames.items),
-        "payments": len(frames.payments),
-    }
+    """Row counts per module for a month using cheap COUNT(*) queries (no DataFrame build)."""
+    init_database(db_path)
+    conn = get_connection(db_path)
+    try:
+        return {
+            "sales_orders": _count_in_month(conn, "sales_orders", "order_date", year, month),
+            "invoices": _count_in_month(conn, "invoices", "invoice_date", year, month),
+            "shipments": _count_in_month(conn, "shipments", "shipment_date", year, month),
+            "items": int(conn.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"] or 0),
+            "payments": _count_in_month(conn, "customer_payments", "payment_date", year, month),
+        }
+    finally:
+        conn.close()
+
+
+def has_period_data(year: int, month: int, db_path: Path | None = None) -> bool:
+    """True when SQLite has sales orders AND invoices for the month (cheap counts)."""
+    init_database(db_path)
+    conn = get_connection(db_path)
+    try:
+        if _count_in_month(conn, "sales_orders", "order_date", year, month) == 0:
+            return False
+        return _count_in_month(conn, "invoices", "invoice_date", year, month) > 0
+    finally:
+        conn.close()
 
 
 def export_period_to_input(year: int, month: int, db_path: Path | None = None) -> dict[str, Path]:

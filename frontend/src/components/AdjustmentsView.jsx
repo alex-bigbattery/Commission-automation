@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { KpiCard, Banner, money, num, LoadingNotice } from "./ui.jsx";
+import { KpiCard, Banner, ErrorBanner, money, num, LoadingNotice } from "./ui.jsx";
 import { IconSearch, IconDollar, IconChart, IconAlert, IconCheck, IconInfo, IconSparkle, IconX } from "./Icons.jsx";
 
 import { API, apiFetch, readJson } from "../lib/api.js";
@@ -118,7 +118,7 @@ export default function AdjustmentsView() {
       const data = await readJson(await apiFetch(`${API}/adjustments/lines?year=${year}&month=${month}`));
       setRows(data.rows || []);
       setRoster(data.roster || []);
-    } catch (err) { setError(err.message); setRows([]); }
+    } catch (err) { setError(err); setRows([]); }
     finally { setLoading(false); setLoadingPeriod(false); }
   }
 
@@ -220,7 +220,7 @@ export default function AdjustmentsView() {
       setStatus(`Saved adjustment for ${editing.invoice} · ${editing.sku}`);
       closeDrawer();
       await load();
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(err); }
     finally { setLoading(false); }
   }
 
@@ -233,7 +233,7 @@ export default function AdjustmentsView() {
       setStatus("Adjustment removed.");
       closeDrawer();
       await load();
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(err); }
     finally { setLoading(false); }
   }
 
@@ -245,7 +245,7 @@ export default function AdjustmentsView() {
         body: JSON.stringify({ year, month }),
       }));
       setStatus(`Workbook regenerated: ${d.report_id} (includes the “Adjustments Audit” sheet).`);
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(err); }
     finally { setLoading(false); }
   }
 
@@ -327,7 +327,7 @@ export default function AdjustmentsView() {
       </section>
 
       {status && <Banner type="success" icon={IconCheck}>{status}</Banner>}
-      {error && <Banner type="danger" icon={IconAlert}>{error}</Banner>}
+      {error && <ErrorBanner error={error} onRetry={load} />}
 
       <div className={loadingPeriod ? "content-loading" : ""}>
       {/* KPIs */}

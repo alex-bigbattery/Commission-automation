@@ -290,16 +290,16 @@ export default function AuditReviewView() {
     if (!id) return;
     const validationData = await readJson(
       await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Validation vs Jennifer")}?source=report`
+        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Validation vs Jennifer")}?source=report`
       )
     );
     const lineMatchData = await readJson(
       await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Line Match vs Jennifer")}?source=report`
+        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Line Match vs Jennifer")}?source=report`
       )
     );
     const exceptionsData = await readJson(
-      await apiFetch(`${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Exceptions")}?source=report`)
+      await apiFetch(`${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Exceptions")}?source=report`)
     );
     setValidation({ columns: validationData.columns || [], rows: validationData.rows || [] });
     setLineMatch({ columns: lineMatchData.columns || [], rows: lineMatchData.rows || [] });

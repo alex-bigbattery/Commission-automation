@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -208,13 +209,29 @@ def _count_excel_rows(path: Path) -> int:
     return len(frame.index)
 
 
+_NOTE_PREFIXES = ("LEGACY DIAGNOSTIC", "This sheet is sourced", "Our calculated commission")
+
+
+def _read_report_df(path: Path, sheet_name: str) -> pd.DataFrame:
+    """Read a report sheet, skipping a leading note/banner row (legacy or source-of-truth) if present."""
+    try:
+        probe = pd.read_excel(path, sheet_name=sheet_name, header=None, nrows=1)
+    except Exception:
+        return pd.DataFrame()
+    skip = False
+    if not probe.empty and probe.shape[1]:
+        first = str(probe.iloc[0, 0] or "")
+        skip = first.startswith(_NOTE_PREFIXES)
+    return pd.read_excel(path, sheet_name=sheet_name, header=1 if skip else 0).fillna("")
+
+
 def _sheet_metrics(path: Path, sheet_name: str) -> tuple[int, list[dict]]:
     if not path.exists():
         return 0, []
     workbook = pd.ExcelFile(path)
     if sheet_name not in workbook.sheet_names:
         return 0, []
-    frame = pd.read_excel(path, sheet_name=sheet_name).fillna("")
+    frame = _read_report_df(path, sheet_name)
     rows = frame.to_dict(orient="records")
     return len(rows), rows
 
@@ -637,9 +654,10 @@ def input_status(year: int = Query(...), month: int = Query(...)) -> dict:
     source = _read_period_source(year, month)
     sqlite_period = {"ready": False, "counts": {}}
     try:
+        counts = period_counts(year, month)  # single set of cheap COUNT(*) queries
         sqlite_period = {
-            "ready": has_period_data(year, month),
-            "counts": period_counts(year, month),
+            "ready": counts.get("sales_orders", 0) > 0 and counts.get("invoices", 0) > 0,
+            "counts": counts,
         }
     except Exception:
         sqlite_period = {"ready": False, "counts": {}}
@@ -713,10 +731,10 @@ def audit_summary(report_id: str | None = None, year: int | None = None, month: 
             raise HTTPException(status_code=404, detail="No generated report found.")
         report_path = generated[0]
 
-    exceptions_count, _ = _sheet_metrics(report_path, "Exceptions")
-    _, line_rows = _sheet_metrics(report_path, "Line Match vs Jennifer")
-    _, validation_rows = _sheet_metrics(report_path, "Validation vs Jennifer")
-    _, commission_rows = _sheet_metrics(report_path, "Commission Detail")
+    exceptions_count, _ = _sheet_metrics(report_path, "Legacy Exceptions")
+    _, line_rows = _sheet_metrics(report_path, "Legacy Line Match vs Jennifer")
+    _, validation_rows = _sheet_metrics(report_path, "Legacy Validation vs Jennifer")
+    _, commission_rows = _sheet_metrics(report_path, "Legacy Commission Detail")
 
     matched = sum(1 for row in line_rows if str(row.get("Line Match Status", "")) == "Matched")
     matched_amount_diff = sum(
@@ -839,7 +857,7 @@ def get_sheet(workbook_id: str, sheet_name: str, source: str = Query("zoho")) ->
     workbook = pd.ExcelFile(path)
     if sheet_name not in workbook.sheet_names:
         raise HTTPException(status_code=404, detail=f"Sheet '{sheet_name}' not found.")
-    frame = pd.read_excel(path, sheet_name=sheet_name).fillna("")
+    frame = _read_report_df(path, sheet_name)
     columns = [str(c) for c in frame.columns.tolist()]
     rows = frame.to_dict(orient="records")
     return {
@@ -908,38 +926,73 @@ def sync_incremental_plan() -> dict:
         return {"modules": incremental_sync_plan(repo)}
 
 
-@app.post("/api/sync/incremental")
-def sync_incremental(skip_details: bool = False) -> dict:
-    init_database()
+# --- Background incremental sync (avoids gateway 504 on long syncs) ----------
+_sync_lock = threading.Lock()
+_sync_state: dict = {
+    "running": False,
+    "status": "idle",       # idle | running | completed | failed
+    "sync_id": None,
+    "started_at": None,
+    "finished_at": None,
+    "totals": None,
+    "modules": None,
+    "warnings": [],
+    "errors": [],
+    "db": None,
+}
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _run_sync_job(skip_details: bool) -> None:
     try:
         config = load_zoho_config()
         client = ZohoBooksClient(config)
         client.refresh_access_token()
-    except ZohoAuthError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    with DatabaseRepository() as repo:
-        result = run_incremental_sync(
-            client,
-            repo,
-            skip_details=skip_details,
-            continue_on_module_error=True,
+        with DatabaseRepository() as repo:
+            result = run_incremental_sync(
+                client, repo, skip_details=skip_details, continue_on_module_error=True
+            )
+        _sync_state.update(
+            status=result.get("status", "completed") if result.get("status") != "failed" else "failed",
+            sync_id=result.get("sync_id"),
+            totals=result.get("totals"),
+            modules=result.get("modules"),
+            warnings=result.get("warnings") or [],
+            errors=result.get("errors") or [],
+            db=database_status(),
         )
+    except Exception as exc:  # ZohoAuthError, network, etc.
+        _sync_state.update(status="failed", errors=[str(exc)])
+    finally:
+        _sync_state["running"] = False
+        _sync_state["finished_at"] = _utcnow()
 
-    db_info = database_status()
-    if result["status"] == "failed" and result.get("errors"):
-        raise HTTPException(status_code=502, detail="; ".join(result["errors"]))
 
-    return {
-        "status": result["status"],
-        "mode": "incremental",
-        "sync_id": result["sync_id"],
-        "totals": result["totals"],
-        "modules": result.get("modules"),
-        "warnings": result.get("warnings") or [],
-        "errors": result.get("errors") or [],
-        "db": db_info,
-    }
+@app.post("/api/sync/incremental")
+def sync_incremental(skip_details: bool = False) -> dict:
+    """Start the incremental Zoho sync in the background and return immediately.
+
+    Long syncs used to run inside the request and hit the gateway's 504 timeout
+    (and blocked other endpoints). Poll GET /api/sync/incremental/status instead.
+    """
+    init_database()
+    with _sync_lock:
+        if _sync_state["running"]:
+            return {"status": "running", "message": "A sync is already in progress.", **_sync_state}
+        _sync_state.update(
+            running=True, status="running", started_at=_utcnow(),
+            finished_at=None, totals=None, modules=None, warnings=[], errors=[], db=None,
+        )
+    threading.Thread(target=_run_sync_job, args=(skip_details,), daemon=True).start()
+    return {"status": "started", "mode": "incremental", "message": "Sync started in background."}
+
+
+@app.get("/api/sync/incremental/status")
+def sync_incremental_status() -> dict:
+    return {"mode": "incremental", **_sync_state}
 
 
 @app.post("/api/fetch")

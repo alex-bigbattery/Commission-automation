@@ -2259,18 +2259,33 @@ def write_excel(
         print(f"WARNING: B2B payable reconciliation skipped: {exc}")
         recon_frames = {}
 
+    LEGACY_NOTE = (
+        "LEGACY DIAGNOSTIC ONLY — Do not use for payment. Use "
+        "'B2B Payable vs Jennifer' and the B2B workbook as the source of truth."
+    )
+    PAYABLE_NOTE = "This sheet is sourced from the B2B payable engine and matches the payable workbook."
+
     with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
-        # Engine-sourced reconciliation first (source of truth), each labeled.
+        # 1) Authoritative engine-sourced sheets FIRST (source of truth), each labeled.
         for sheet_name, frame in recon_frames.items():
             frame.to_excel(writer, sheet_name=sheet_name, index=False, startrow=1)
-            writer.sheets[sheet_name].cell(1, 1, SOURCE_LABEL)
-        audit_out.to_excel(writer, sheet_name="Commission Detail", index=False)
-        line_match.to_excel(writer, sheet_name="Line Match vs Jennifer", index=False)
+            note = PAYABLE_NOTE if sheet_name == "B2B Payable vs Jennifer" else SOURCE_LABEL
+            writer.sheets[sheet_name].cell(1, 1, note)
+
+        # 2) Legacy diagnostic sheets — renamed + warned, kept for reference only.
+        def _legacy(frame, name):
+            frame.to_excel(writer, sheet_name=name, index=False, startrow=1)
+            writer.sheets[name].cell(1, 1, LEGACY_NOTE)
+
+        _legacy(audit_out, "Legacy Commission Detail")
+        _legacy(line_match, "Legacy Line Match vs Jennifer")
+        _legacy(exceptions, "Legacy Exceptions")
+        _legacy(not_in_jennifer_review, "Legacy Not in Jennifer Review")
+        _legacy(summary, "Legacy Summary")
+        _legacy(validation, "Legacy Validation vs Jennifer")
+
+        # 3) Reference data (unchanged).
         shipping_detail.to_excel(writer, sheet_name="Shipping Charges", index=False)
-        exceptions.to_excel(writer, sheet_name="Exceptions", index=False)
-        not_in_jennifer_review.to_excel(writer, sheet_name="Not in Jennifer Review", index=False)
-        summary.to_excel(writer, sheet_name="Summary", index=False)
-        validation.to_excel(writer, sheet_name="Validation vs Jennifer", index=False)
         jennifer_lines.to_excel(writer, sheet_name="Jennifer Lines", index=False)
         jennifer_summary.to_excel(writer, sheet_name="Jennifer Summary Raw", index=False)
 

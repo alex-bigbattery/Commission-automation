@@ -2059,3 +2059,26 @@ button {
 .help-body ul { margin: 0 0 0.75rem; padding-left: 1.1rem; }
 .help-body li { margin-bottom: 0.35rem; }
 .adj-drawer-backdrop { align-items: stretch; }
+
+/* =========================================================================
+   Friendly error banner
+   ========================================================================= */
+.error-banner { align-items: flex-start; gap: 0.6rem; }
+.error-banner > svg { flex-shrink: 0; margin-top: 2px; }
+.error-banner-body { flex: 1; min-width: 0; }
+.error-banner-title { font-weight: 700; font-size: 13.5px; margin-bottom: 2px; }
+.error-banner-msg { font-size: 13px; }
+.error-banner-suggestion {
+  font-size: 12.5px; margin-top: 0.4rem; padding: 0.4rem 0.55rem;
+  background: rgba(255, 255, 255, 0.55); border-radius: var(--r-sm);
+  color: var(--bb-text);
+}
+.error-banner-contact { font-size: 12px; margin-top: 0.45rem; color: var(--bb-text-muted); }
+.error-banner-contact a { color: var(--bb-accent); font-weight: 600; text-decoration: underline; }
+.error-banner-code { color: var(--bb-text-faint); }
+.error-banner-details { margin-top: 0.35rem; }
+.error-banner-details summary { cursor: pointer; font-size: 11.5px; color: var(--bb-text-faint); }
+.error-banner-details code {
+  display: block; margin-top: 0.25rem; font-size: 11px; white-space: pre-wrap;
+  word-break: break-word; color: var(--bb-text-muted); font-family: var(--font-mono);
+}

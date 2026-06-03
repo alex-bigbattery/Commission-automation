@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useState } from "react";
 import { IconCheck, IconAlert, IconInfo, IconX } from "./Icons.jsx";
+import { SUPPORT_CONTACT } from "../lib/api.js";
 
 /* ---------------------------------------------------------------------------
    Toast system
@@ -98,6 +99,51 @@ export function Banner({ type = "info", icon: Icon, children }) {
     <div className={`banner banner-${type}`}>
       {Icon && <Icon />}
       <div>{children}</div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Error banner — friendly message + suggestion + contact developer
+   --------------------------------------------------------------------------- */
+
+export function ErrorBanner({ error, onRetry }) {
+  if (!error) return null;
+  const e = typeof error === "string" ? { message: error } : error || {};
+  const contactHref = SUPPORT_CONTACT
+    ? SUPPORT_CONTACT.includes("@")
+      ? `mailto:${SUPPORT_CONTACT}`
+      : SUPPORT_CONTACT
+    : null;
+
+  return (
+    <div className="banner banner-danger error-banner" role="alert">
+      <IconAlert />
+      <div className="error-banner-body">
+        {e.title && <div className="error-banner-title">{e.title}</div>}
+        {e.message && <div className="error-banner-msg">{e.message}</div>}
+        {e.suggestion && <div className="error-banner-suggestion">💡 {e.suggestion}</div>}
+        <div className="error-banner-contact">
+          Still need help?{" "}
+          {contactHref ? (
+            <a href={contactHref}>Contact the developer</a>
+          ) : (
+            <span>Contact the developer</span>
+          )}
+          {e.status ? <span className="error-banner-code"> · error {e.status}</span> : null}
+          {e.detail ? (
+            <details className="error-banner-details">
+              <summary>Technical details</summary>
+              <code>{e.detail}</code>
+            </details>
+          ) : null}
+        </div>
+      </div>
+      {onRetry && (
+        <button type="button" className="btn btn-sm" onClick={onRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 }
