@@ -135,12 +135,14 @@ def issue_found(row: dict[str, Any]) -> str:
     if "PARTIALLY_RETURNED" in flags:
         return "Partially returned"
     team = str(row.get("sales_team") or "").lower()
+    zoho = str(row.get("original_zoho_salesperson") or "")
     if row.get("pending"):
-        if "exe" in team or "comp" in team:
-            return "Company / Executive account needs classification"
-        zoho = str(row.get("original_zoho_salesperson") or "")
         if zoho == MISSING_ZOHO_LABEL:
             return ISSUE_MISSING_ZOHO
+        if "UNASSIGNED" in flags and zoho not in ("", MISSING_ZOHO_LABEL):
+            return ISSUE_NOT_IN_ROSTER
+        if "exe" in team or "comp" in team:
+            return "Company / Executive account needs classification"
         if "UNASSIGNED" in flags:
             return ISSUE_NOT_IN_ROSTER
         return ISSUE_MISSING_ZOHO
@@ -167,11 +169,13 @@ def suggested_action(row: dict[str, Any]) -> str:
         zoho = str(row.get("original_zoho_salesperson") or "")
         if zoho == MISSING_ZOHO_LABEL:
             return ACTION_MISSING_ZOHO
-        if "UNASSIGNED" in flags:
+        if "UNASSIGNED" in flags and zoho not in ("", MISSING_ZOHO_LABEL):
             return ACTION_NOT_IN_ROSTER
         team = str(row.get("sales_team") or "").lower()
         if "exe" in team or "comp" in team:
             return "Classify as Company / Executive"
+        if "UNASSIGNED" in flags:
+            return ACTION_NOT_IN_ROSTER
         return ACTION_MISSING_ZOHO
     if "MISSING_MAP" in flags:
         return "Review MAP / discount"

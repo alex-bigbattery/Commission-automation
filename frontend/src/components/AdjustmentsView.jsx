@@ -89,7 +89,10 @@ function finalAssignment(r) {
 }
 
 function zohoSalesperson(r) {
-  return r.original_zoho_salesperson || r.system_salesperson || "—";
+  if (r.original_zoho_salesperson) return r.original_zoho_salesperson;
+  const sys = r.system_salesperson || "";
+  if (sys === "(unassigned)") return "— (update backend — redeploy required)";
+  return sys || "—";
 }
 
 const VIEWS = [
