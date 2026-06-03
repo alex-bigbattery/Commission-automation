@@ -1,5 +1,8 @@
 # Netlify config — builds the React/Vite frontend and proxies /api to Render.
 # Backend: https://commission-backend-0d4h.onrender.com
+#
+# NOTE: Netlify's /api proxy times out at ~26s. Long operations (generate, sync, audit)
+# must call Render directly — set VITE_API_BASE_URL in Netlify env vars.
 
 [build]
   base = "frontend"

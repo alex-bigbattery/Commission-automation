@@ -1,6 +1,8 @@
 import { supabase } from "./supabase.js";
 
-const API = "/api";
+/** Local dev: `/api` (Vite proxy). Production: set VITE_API_BASE_URL to Render (bypasses Netlify 26s proxy limit). */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+const API = API_BASE ? `${API_BASE}/api` : "/api";
 
 // Optional developer/support contact (email or URL). Set VITE_SUPPORT_CONTACT
 // in the frontend env to turn the "Contact the developer" text into a link.
@@ -40,7 +42,7 @@ function friendlyError(status, rawDetail) {
       title: "The server took too long to respond",
       message: "The request timed out before it finished.",
       suggestion:
-        "The server may be busy (for example, syncing Zoho data). Wait a minute and try again — large syncs run in the background.",
+        "Generating commissions can take 1–2 minutes on the first try (server wake-up). Wait a moment and try again. If it keeps failing, refresh the page and retry.",
     };
   }
   if (status === 502 || status === 503) {

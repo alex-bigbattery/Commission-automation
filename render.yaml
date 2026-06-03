@@ -22,9 +22,9 @@ services:
         value: "https://evgmeszyxjzrrbrzznhv.supabase.co"
       - key: SUPABASE_JWT_SECRET
         sync: false
-      # Comma-separated Netlify/custom origins for direct API access (optional)
+      # Comma-separated Netlify/custom origins for direct browser → Render API calls
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: "https://bigbatterycommission.netlify.app"
       # Optional: historical Excel root if mounted elsewhere
       - key: COMMISSIONS_ROOT
         sync: false
