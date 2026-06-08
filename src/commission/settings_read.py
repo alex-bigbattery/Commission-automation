@@ -6,7 +6,7 @@ engine globals or writing to any table.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -298,6 +298,9 @@ def get_roster_settings() -> dict[str, Any]:
 # Matches zoho_price_history_sync.FAR_FUTURE — open-ended live rows.
 FAR_FUTURE = "9999-12-31"
 ZOHO_SYNC_PREFIX = "zoho_sync_"
+ACCOUNTANT_FVPRICE_PREFIX = "accountant_fvprice_"
+IMPORTED_RLP_PREFIX = "imported_rlp_"
+IMPORTED_RLP_CAUTION = "R_LP fallback source — not confirmed FV_PRICE."
 
 
 def _today_iso() -> str:
@@ -313,14 +316,19 @@ def _format_effective_to(effective_to: str) -> str:
 
 
 def _source_kind(source: str, snapshot_month: str) -> str:
+    """Classify price_history provenance for Settings UI badges."""
     src = str(source or "")
-    snap = str(snapshot_month or "")
-    if snap and snap != "live":
-        return "accountant_snapshot"
     if src.startswith(ZOHO_SYNC_PREFIX):
         return "zoho_live_sync"
+    if src.startswith(IMPORTED_RLP_PREFIX):
+        return "imported_rlp"
+    if src.startswith(ACCOUNTANT_FVPRICE_PREFIX):
+        return "accountant_fvprice"
     if src.startswith("manual"):
         return "manual"
+    snap = str(snapshot_month or "")
+    if snap and snap != "live":
+        return "other_snapshot"
     return "other"
 
 
@@ -351,6 +359,7 @@ def _enrich_price_row(row: dict[str, Any], today: str) -> dict[str, Any]:
         **row,
         "effective_to_display": _format_effective_to(effective_to),
         "source_kind": kind,
+        "source_caution": IMPORTED_RLP_CAUTION if kind == "imported_rlp" else None,
         "is_snapshot": is_snapshot,
         "is_current_live": is_current_live,
         "is_active_for_today": is_active,
@@ -366,10 +375,54 @@ def _windows_overlap(a_from: str, a_to: str, b_from: str, b_to: str) -> bool:
     return a_from <= b_end and b_from <= a_end
 
 
+def _parse_iso_date(value: str) -> _date | None:
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _detect_coverage_gaps(rows: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Days between consecutive windows with no price_history row."""
+    if len(rows) < 2:
+        return []
+    ordered = sorted(rows, key=lambda r: str(r.get("effective_from") or ""))
+    gaps: list[tuple[str, str]] = []
+    for i in range(len(ordered) - 1):
+        a, b = ordered[i], ordered[i + 1]
+        a_to = str(a.get("effective_to") or "")
+        b_from = str(b.get("effective_from") or "")
+        if _is_open_end(a_to):
+            continue
+        end_d = _parse_iso_date(a_to)
+        start_d = _parse_iso_date(b_from)
+        if not end_d or not start_d:
+            continue
+        gap_start = end_d + timedelta(days=1)
+        if gap_start < start_d:
+            gaps.append((gap_start.isoformat(), (start_d - timedelta(days=1)).isoformat()))
+    return gaps
+
+
 def _detect_price_history_warnings(rows: list[dict[str, Any]], today: str) -> list[str]:
     warnings: list[str] = []
     if not rows:
         return warnings
+
+    imported_rlp = [r for r in rows if r.get("source_kind") == "imported_rlp"]
+    if imported_rlp:
+        warnings.append(
+            f"{IMPORTED_RLP_CAUTION} ({len(imported_rlp)} row(s) on this SKU.)"
+        )
+
+    for gap_from, gap_to in _detect_coverage_gaps(rows):
+        msg = (
+            f"Missing price coverage: {gap_from} to {gap_to} — "
+            "commission may use R_LP / items.rate fallback."
+        )
+        if gap_from <= "2026-06-04" and gap_to >= "2026-06-01":
+            msg += " Includes 2026-06-01 to 2026-06-04 before live Zoho sync."
+        warnings.append(msg)
 
     active_today = [r for r in rows if r.get("is_active_for_today")]
     if not active_today:

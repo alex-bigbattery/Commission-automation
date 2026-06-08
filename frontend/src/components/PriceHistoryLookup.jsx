@@ -1,9 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, readJson } from "../lib/api.js";
+import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
 import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconRefresh, IconSearch } from "./Icons.jsx";
 
 const CATALOG_PAGE = 100;
+const MATRIX_PREVIEW_LIMIT = 100;
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultGranularity(fromIso, toIso) {
+  const a = new Date(`${fromIso}T00:00:00`);
+  const b = new Date(`${toIso}T00:00:00`);
+  const days = Math.round((b - a) / 86400000) + 1;
+  return days <= 45 ? "daily" : "monthly";
+}
+
+function matrixCellClass(sourceType) {
+  if (sourceType === "accountant_fvprice") return "ph-cell-accountant";
+  if (sourceType === "imported_rlp") return "ph-cell-rlp";
+  if (sourceType === "zoho_live_sync") return "ph-cell-live";
+  if (sourceType === "rlp_fallback") return "ph-cell-rlp-fallback";
+  return "";
+}
+
+function MatrixPriceCell({ cell }) {
+  if (!cell) return <span className="ph-cell-empty">—</span>;
+  const title = [cell.source, cell.source_caution].filter(Boolean).join(" · ");
+  return (
+    <span className={`ph-matrix-price ${matrixCellClass(cell.source_type)}`} title={title}>
+      {money(cell.map_price)}
+    </span>
+  );
+}
 
 function money(value) {
   if (value == null || Number.isNaN(Number(value))) return "—";
@@ -14,15 +44,31 @@ function money(value) {
   });
 }
 
+const SOURCE_KIND_META = {
+  accountant_fvprice: { label: "Accountant FV_PRICE snapshot", variant: "info" },
+  imported_rlp: { label: "Imported R_LP snapshot", variant: "warning" },
+  zoho_live_sync: { label: "Zoho live sync", variant: "success" },
+  manual: { label: "Manual", variant: "warning" },
+  other_snapshot: { label: "Other snapshot", variant: "default" },
+  other: { label: "Other", variant: "default" },
+};
+
 function SourceBadge({ kind }) {
-  const map = {
-    accountant_snapshot: { label: "Accountant snapshot", variant: "info" },
-    zoho_live_sync: { label: "Zoho live sync", variant: "success" },
-    manual: { label: "Manual", variant: "warning" },
-    other: { label: "Other", variant: "default" },
-  };
-  const def = map[kind] || map.other;
+  const def = SOURCE_KIND_META[kind] || SOURCE_KIND_META.other;
   return <Pill variant={def.variant}>{def.label}</Pill>;
+}
+
+function SourceTypeCell({ row }) {
+  return (
+    <div className="ph-source-type">
+      <SourceBadge kind={row.source_kind} />
+      {row.source_caution ? (
+        <span className="ph-source-caution" title={row.source_caution}>
+          {row.source_caution}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function PriceStepChart({ rows }) {
@@ -52,9 +98,11 @@ function PriceStepChart({ rows }) {
     const yScale = (v) => h - pad - ((v - minY) / spanY) * (h - pad * 2);
 
     const colors = {
-      accountant_snapshot: "#2563eb",
+      accountant_fvprice: "#2563eb",
+      imported_rlp: "#d97706",
       zoho_live_sync: "#16a34a",
       manual: "#d97706",
+      other_snapshot: "#64748b",
       other: "#64748b",
     };
 
@@ -165,6 +213,17 @@ export default function PriceHistoryLookup() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const [timelineFrom, setTimelineFrom] = useState("2026-04-01");
+  const [timelineTo, setTimelineTo] = useState(todayIso());
+  const [granularity, setGranularity] = useState("daily");
+  const [granularityTouched, setGranularityTouched] = useState(false);
+  const [includeFallback, setIncludeFallback] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [matrixData, setMatrixData] = useState(null);
+  const [detailList, setDetailList] = useState(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState(null);
+
   const loadCatalog = useCallback(async (q, page) => {
     setCatalogLoading(true);
     setCatalogError(null);
@@ -175,7 +234,7 @@ export default function PriceHistoryLookup() {
         offset: String(offset),
       });
       if (q.trim()) params.set("q", q.trim());
-      const res = await apiFetch(`/settings/price-history/catalog?${params.toString()}`);
+      const res = await apiFetch(`${API}/settings/price-history/catalog?${params.toString()}`);
       const payload = await readJson(res);
       setCatalog({
         results: Array.isArray(payload?.results) ? payload.results : [],
@@ -195,7 +254,7 @@ export default function PriceHistoryLookup() {
     setDropdownLoading(true);
     setCatalogError(null);
     try {
-      const res = await apiFetch("/settings/price-history/catalog?limit=500&offset=0");
+      const res = await apiFetch(`${API}/settings/price-history/catalog?limit=500&offset=0`);
       const payload = await readJson(res);
       setDropdownOptions(Array.isArray(payload?.results) ? payload.results : []);
       setDbDiag({
@@ -233,7 +292,7 @@ export default function PriceHistoryLookup() {
     }
     setSearchLoading(true);
     try {
-      const res = await apiFetch(`/settings/price-history/search?q=${encodeURIComponent(trimmed)}&limit=30`);
+      const res = await apiFetch(`${API}/settings/price-history/search?q=${encodeURIComponent(trimmed)}&limit=30`);
       const payload = await readJson(res);
       setSearchResults(Array.isArray(payload?.results) ? payload.results : []);
     } catch {
@@ -256,7 +315,7 @@ export default function PriceHistoryLookup() {
       if (monthFilter) params.set("snapshot_month", monthFilter);
       if (dateFrom) params.set("date_from", dateFrom);
       if (dateTo) params.set("date_to", dateTo);
-      const res = await apiFetch(`/settings/price-history?${params.toString()}`);
+      const res = await apiFetch(`${API}/settings/price-history?${params.toString()}`);
       const payload = await readJson(res);
       setDetail(payload);
     } catch {
@@ -276,7 +335,7 @@ export default function PriceHistoryLookup() {
     loadDropdownOptions();
     (async () => {
       try {
-        const res = await apiFetch("/settings/price-history/catalog?limit=1&offset=0");
+        const res = await apiFetch(`${API}/settings/price-history/catalog?limit=1&offset=0`);
         const payload = await readJson(res);
         setCatalog((prev) => ({ ...prev, total: payload?.total ?? prev.total }));
       } catch {
@@ -327,6 +386,62 @@ export default function PriceHistoryLookup() {
   }, [dropdownOptions, query]);
 
   const catalogPages = Math.max(1, Math.ceil((catalog.total || 0) / CATALOG_PAGE));
+
+  useEffect(() => {
+    if (!granularityTouched && timelineFrom && timelineTo) {
+      setGranularity(defaultGranularity(timelineFrom, timelineTo));
+    }
+  }, [timelineFrom, timelineTo, granularityTouched]);
+
+  const buildTimelineParams = useCallback((extra = {}) => {
+    const params = new URLSearchParams({
+      from: timelineFrom,
+      to: timelineTo,
+      granularity,
+      include_fallback: String(includeFallback),
+      ...extra,
+    });
+    if (catalogFilter.trim()) params.set("q", catalogFilter.trim());
+    return params;
+  }, [timelineFrom, timelineTo, granularity, includeFallback, catalogFilter]);
+
+  const loadTimeline = useCallback(async () => {
+    setTimelineLoading(true);
+    setTimelineError(null);
+    try {
+      const matrixParams = buildTimelineParams({
+        limit: String(MATRIX_PREVIEW_LIMIT),
+        offset: "0",
+      });
+      const detailParams = buildTimelineParams({ limit: "500", offset: "0" });
+      const [matrixRes, detailRes] = await Promise.all([
+        apiFetch(`${API}/settings/price-history/matrix?${matrixParams.toString()}`),
+        apiFetch(`${API}/settings/price-history/detail-list?${detailParams.toString()}`),
+      ]);
+      setMatrixData(await readJson(matrixRes));
+      setDetailList(await readJson(detailRes));
+      setShowTimeline(true);
+    } catch (e) {
+      setTimelineError(e);
+      setMatrixData(null);
+      setDetailList(null);
+    } finally {
+      setTimelineLoading(false);
+    }
+  }, [buildTimelineParams]);
+
+  const exportTimeline = useCallback((mode, format) => {
+    const params = buildTimelineParams({ mode, format });
+    const ext = format === "xlsx" ? "xlsx" : "csv";
+    const name = mode === "matrix" ? `price_timeline_matrix.${ext}` : `price_history_detail.${ext}`;
+    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, name);
+  }, [buildTimelineParams]);
+
+  const timelineWarnings = matrixData?.warnings ?? [];
+  const matrixDates = matrixData?.dates ?? [];
+  const matrixRows = matrixData?.rows ?? [];
+  const detailRows = detailList?.rows ?? [];
+  const dailyColumnWarning = granularity === "daily" && matrixDates.length > 45;
 
   const rows = detail?.rows ?? [];
   const warnings = detail?.warnings ?? [];
@@ -485,6 +600,154 @@ export default function PriceHistoryLookup() {
               </div>
             ) : null}
             <p className="text-faint ph-hint">Click a row to view that SKU&apos;s full price timeline below.</p>
+
+            <section className="ph-timeline-section">
+              <h4 className="ph-timeline-title">Price timeline range</h4>
+              <div className="table-toolbar settings-filters ph-timeline-filters">
+                <label className="settings-filter-label">
+                  From
+                  <input type="date" value={timelineFrom} onChange={(e) => setTimelineFrom(e.target.value)} />
+                </label>
+                <label className="settings-filter-label">
+                  To
+                  <input type="date" value={timelineTo} onChange={(e) => setTimelineTo(e.target.value)} />
+                </label>
+                <label className="settings-filter-label">
+                  Granularity
+                  <select
+                    value={granularity}
+                    onChange={(e) => {
+                      setGranularity(e.target.value);
+                      setGranularityTouched(true);
+                    }}
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </label>
+                <label className="settings-filter-label ph-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={includeFallback}
+                    onChange={(e) => setIncludeFallback(e.target.checked)}
+                  />
+                  Include fallback prices (R_LP template)
+                </label>
+                <button type="button" className="btn btn-sm btn-primary" onClick={loadTimeline} disabled={timelineLoading}>
+                  View Timeline
+                </button>
+              </div>
+
+              {dailyColumnWarning ? (
+                <Banner type="warning" icon={IconAlert}>
+                  Daily export over large ranges may create many columns ({matrixDates.length} dates).
+                  Use monthly granularity for long ranges.
+                </Banner>
+              ) : null}
+
+              <div className="ph-export-row">
+                <span className="text-faint">Export (all SKUs matching filter, up to 2,000):</span>
+                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("detail", "csv")}>Detail CSV</button>
+                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("matrix", "csv")}>Matrix CSV</button>
+                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("detail", "xlsx")}>Detail Excel</button>
+                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("matrix", "xlsx")}>Matrix Excel</button>
+              </div>
+
+              <ErrorBanner error={timelineError} onRetry={loadTimeline} />
+
+              {timelineLoading ? <LoadingNotice>Building price timeline…</LoadingNotice> : null}
+
+              {showTimeline && !timelineLoading && matrixData ? (
+                <>
+                  <p className="text-faint ph-hint">
+                    Matrix preview: first {matrixData.count} of {matrixData.total_skus} SKU(s)
+                    · {matrixData.date_count} {matrixData.granularity} column(s)
+                    · {timelineFrom} → {timelineTo}
+                  </p>
+
+                  {timelineWarnings.map((w, i) => (
+                    <Banner key={`tw-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
+                  ))}
+
+                  <h4 className="ph-timeline-title">Price Timeline Matrix</h4>
+                  <div className="table-wrap ph-matrix-wrap">
+                    <table className="data-table settings-table ph-matrix-table">
+                      <thead>
+                        <tr>
+                          <th className="ph-sticky-col">SKU</th>
+                          <th>Item ID</th>
+                          <th>Item Name</th>
+                          <th className="cell-number">Current MAP</th>
+                          <th>Latest Source</th>
+                          {matrixDates.map((d) => <th key={d} className="cell-number ph-date-col">{d}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matrixRows.map((row) => (
+                          <tr key={row.sku}>
+                            <td className="ph-sticky-col"><code>{row.sku}</code></td>
+                            <td>{row.item_id || "—"}</td>
+                            <td className="cell-trunc" title={row.item_name || ""}>{row.item_name || "—"}</td>
+                            <td className="cell-number">{money(row.current_map)}</td>
+                            <td className="cell-trunc" title={row.latest_source || ""}>{row.latest_source || "—"}</td>
+                            {matrixDates.map((d) => (
+                              <td key={`${row.sku}-${d}`} className="cell-number">
+                                <MatrixPriceCell cell={row.prices?.[d]} />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {!matrixRows.length ? (
+                          <tr><td colSpan={5 + matrixDates.length} className="text-faint">No SKUs in this range.</td></tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <h4 className="ph-timeline-title">Price Change Detail</h4>
+                  <div className="table-wrap">
+                    <table className="data-table settings-table">
+                      <thead>
+                        <tr>
+                          <th>SKU</th>
+                          <th>Item ID</th>
+                          <th className="cell-number">MAP Price</th>
+                          <th>Effective From</th>
+                          <th>Effective To</th>
+                          <th>Source</th>
+                          <th>Type</th>
+                          <th>Snapshot Month</th>
+                          <th>Active Today</th>
+                          <th>Captured At</th>
+                          <th>Warning / Caution</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailRows.map((row, i) => (
+                          <tr key={`${row.sku}-${row.effective_from}-${i}`}>
+                            <td><code>{row.sku}</code></td>
+                            <td>{row.item_id || "—"}</td>
+                            <td className="cell-number">{money(row.map_price)}</td>
+                            <td>{row.effective_from}</td>
+                            <td>{row.effective_to_display}</td>
+                            <td className="cell-trunc" title={row.source}>{row.source}</td>
+                            <td><SourceBadge kind={row.source_kind} /></td>
+                            <td>{row.snapshot_month}</td>
+                            <td>{row.is_active_for_today ? "Yes" : "—"}</td>
+                            <td className="cell-trunc">{row.captured_at}</td>
+                            <td className="cell-trunc">{row.warning_caution || row.source_caution || "—"}</td>
+                          </tr>
+                        ))}
+                        {!detailRows.length ? (
+                          <tr><td colSpan={11} className="text-faint">No price_history rows overlap this date range.</td></tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+            </section>
           </div>
         </section>
       )}
@@ -525,6 +788,15 @@ export default function PriceHistoryLookup() {
                 ))}
               </div>
             ) : null}
+
+            <div className="ph-source-legend">
+              <SourceBadge kind="accountant_fvprice" />
+              <SourceBadge kind="imported_rlp" />
+              <SourceBadge kind="zoho_live_sync" />
+              <span className="text-faint ph-source-legend-note">
+                Imported R_LP rows are fallback/reference only — not confirmed accountant FV_PRICE.
+              </span>
+            </div>
 
             <div className="table-toolbar settings-filters ph-filters">
               <label className="settings-filter-label">
@@ -587,7 +859,7 @@ export default function PriceHistoryLookup() {
                       <td>{row.effective_from}</td>
                       <td>{row.effective_to_display}</td>
                       <td className="cell-trunc" title={row.source}>{row.source}</td>
-                      <td><SourceBadge kind={row.source_kind} /></td>
+                      <td><SourceTypeCell row={row} /></td>
                       <td>{row.snapshot_month}</td>
                       <td>{row.is_active_for_today ? "Yes" : "—"}</td>
                       <td className="cell-trunc">{row.captured_at}</td>

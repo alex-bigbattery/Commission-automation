@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
@@ -35,6 +35,11 @@ from src.commission.sqlite_data_source import (
     period_counts,
 )
 from src.commission.roster import roster_rep_sheet_keys
+from src.commission.price_history_matrix import (
+    export_price_history_file,
+    get_price_history_detail_list,
+    get_price_history_matrix,
+)
 from src.commission.settings_read import (
     get_commission_settings,
     get_price_history_for_sku,
@@ -1243,4 +1248,79 @@ def settings_price_history(
         snapshot_month=snapshot_month,
         limit=limit,
         offset=offset,
+    )
+
+
+@app.get("/api/settings/price-history/matrix")
+def settings_price_history_matrix(
+    q: str = Query(""),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    granularity: str | None = Query(None),
+    include_fallback: bool = Query(False),
+    limit: int = Query(100, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Read-only SKU × date MAP matrix from price_history."""
+    try:
+        return get_price_history_matrix(
+            q=q,
+            from_date=from_date,
+            to_date=to_date,
+            granularity=granularity,
+            include_fallback=include_fallback,
+            limit=limit,
+            offset=offset,
+            template_path=MASTER_TEMPLATE,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/settings/price-history/detail-list")
+def settings_price_history_detail_list(
+    q: str = Query(""),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Read-only flat list of price_history rows for matrix browse / export preview."""
+    return get_price_history_detail_list(
+        q=q,
+        from_date=from_date,
+        to_date=to_date,
+        sku_limit=limit,
+        sku_offset=offset,
+    )
+
+
+@app.get("/api/settings/price-history/export")
+def settings_price_history_export(
+    mode: str = Query("detail", pattern="^(detail|matrix)$"),
+    format: str = Query("csv", alias="format", pattern="^(csv|xlsx)$"),
+    q: str = Query(""),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    granularity: str | None = Query(None),
+    include_fallback: bool = Query(False),
+):
+    """Download price_history matrix or detail as CSV / XLSX (read-only generation)."""
+    try:
+        content, filename, media_type = export_price_history_file(
+            mode=mode,  # type: ignore[arg-type]
+            fmt=format,  # type: ignore[arg-type]
+            q=q,
+            from_date=from_date,
+            to_date=to_date,
+            granularity=granularity,
+            include_fallback=include_fallback,
+            template_path=MASTER_TEMPLATE,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
