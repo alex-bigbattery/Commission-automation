@@ -26,7 +26,7 @@ from src.commission.sqlite_to_workbook import (
     load_tiers_from_template,
 )
 from src.commission.ticket_classification import classify_ticket_number
-from src.db.connection import DbConnection, get_connection
+from src.db.connection import DbConnection, get_connection, using_postgres
 
 
 # Same value as backend/app.py OVER_5000_THRESHOLD — virtual review annotation only.
@@ -449,6 +449,31 @@ def _fetch_hist_for_skus(conn: DbConnection, sku_list: list[str]) -> dict[str, l
     return grouped
 
 
+def _price_history_diagnostics(conn: DbConnection) -> dict[str, Any]:
+    """Read-only counts for Settings UI troubleshooting."""
+    try:
+        row_count = int(conn.execute("SELECT COUNT(*) AS c FROM price_history").fetchone()["c"])
+        sku_count = int(
+            conn.execute(
+                "SELECT COUNT(DISTINCT UPPER(sku)) AS c FROM price_history "
+                "WHERE sku IS NOT NULL AND sku != ''"
+            ).fetchone()["c"]
+        )
+    except Exception as exc:
+        return {
+            "database_backend": "postgres" if using_postgres() else "sqlite",
+            "price_history_row_count": None,
+            "price_history_sku_count": None,
+            "diagnostics_error": str(exc),
+        }
+    return {
+        "database_backend": "postgres" if using_postgres() else "sqlite",
+        "price_history_row_count": row_count,
+        "price_history_sku_count": sku_count,
+        "diagnostics_error": None,
+    }
+
+
 def list_price_history_catalog(
     *,
     q: str = "",
@@ -498,6 +523,7 @@ def list_price_history_catalog(
         "offset": safe_offset,
         "count": len(results),
         "results": results,
+        **_price_history_diagnostics(conn),
     }
 
 
@@ -602,6 +628,7 @@ def get_price_history_for_sku(
             "date_from": (date_from or "").strip() or None,
             "date_to": (date_to or "").strip() or None,
         },
+        **_price_history_diagnostics(conn),
     }
 
 

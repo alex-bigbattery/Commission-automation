@@ -560,6 +560,7 @@ def database_status(db_path: Path | None = None) -> dict[str, Any]:
                 "shipments",
                 "items",
                 "customer_payments",
+                "price_history",
             ]
         }
         last = conn.execute(

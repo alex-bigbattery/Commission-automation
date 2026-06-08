@@ -155,6 +155,7 @@ export default function PriceHistoryLookup() {
   const [dropdownOptions, setDropdownOptions] = useState([]);
   const [dropdownLoading, setDropdownLoading] = useState(false);
   const [catalogError, setCatalogError] = useState(null);
+  const [dbDiag, setDbDiag] = useState(null);
 
   const [selectedSku, setSelectedSku] = useState("");
   const [detail, setDetail] = useState(null);
@@ -197,8 +198,24 @@ export default function PriceHistoryLookup() {
       const res = await apiFetch("/settings/price-history/catalog?limit=500&offset=0");
       const payload = await readJson(res);
       setDropdownOptions(Array.isArray(payload?.results) ? payload.results : []);
+      setDbDiag({
+        backend: payload?.database_backend,
+        rows: payload?.price_history_row_count,
+        skus: payload?.price_history_sku_count,
+      });
       if ((payload?.total ?? 0) === 0) {
-        setCatalogError({ title: "No price history data", message: "The price_history table is empty on the server." });
+        const backend = payload?.database_backend || "unknown";
+        const rows = payload?.price_history_row_count;
+        const skus = payload?.price_history_sku_count;
+        setCatalogError({
+          title: "No price history data on this backend",
+          message: rows != null
+            ? `Backend=${backend} · price_history rows=${rows} · SKUs=${skus ?? 0}. `
+              + (backend === "sqlite"
+                ? "Production likely has no DATABASE_URL — connect Render to Supabase Postgres."
+                : "If you expected data, verify Render DATABASE_URL matches the Supabase project where snapshots were loaded.")
+            : "The catalog returned zero SKUs. Check backend database connection.",
+        });
       }
     } catch (e) {
       setDropdownOptions([]);
@@ -323,6 +340,14 @@ export default function PriceHistoryLookup() {
       </Banner>
 
       <ErrorBanner error={catalogError} onRetry={() => { loadDropdownOptions(); loadCatalog(catalogFilter, catalogPage); }} />
+
+      {dbDiag?.rows != null ? (
+        <p className="text-faint ph-hint">
+          Server DB: <strong>{dbDiag.backend}</strong>
+          {" · "}price_history rows: <strong>{dbDiag.rows}</strong>
+          {" · "}SKUs: <strong>{dbDiag.skus ?? 0}</strong>
+        </p>
+      ) : null}
 
       <div className="ph-picker-tabs">
         <button
