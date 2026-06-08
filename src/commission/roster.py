@@ -145,6 +145,8 @@ def _parse_env_roster(raw: str) -> list[tuple[str, str]] | None:
 
 
 def roster_rep_entries() -> list[tuple[str, str]]:
+    if globals().get("_TPL_REPS"):            # business config (template) wins
+        return list(_TPL_REPS)
     override = _parse_env_roster(os.environ.get("COMMISSION_ROSTER", ""))
     return override if override is not None else list(DEFAULT_ROSTER_ENTRIES)
 
@@ -176,8 +178,90 @@ def build_catalog() -> tuple[list[tuple[str, str]], dict[str, str], frozenset[st
     full_to_sheet = {full: sheet for sheet, full in reps}
     full_to_sheet.update(EXTRA_NAME_ALIASES)
     full_to_sheet.update(_parse_aliases_env())
+    _tpl = globals().get("_TPL_PEOPLE")
+    if _tpl and _tpl.get("aliases"):
+        full_to_sheet.update(_tpl["aliases"])
     roster_sheets = frozenset(s for s, _ in reps)
     return all_ordered, full_to_sheet, roster_sheets
+
+
+_TEMPLATE_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "templates" / "master_template_clean.xlsx"
+
+
+def _load_people_config_from_template(path: Path = _TEMPLATE_PATH) -> dict[str, Any] | None:
+    """Business-maintained people config from the template's 'Config_People' sheet.
+
+    Columns: Full Name | Role(rep/company/executive/inactive/b2c/alias) | Sheet Key | Pay Type.
+    Returns parsed buckets, or None if the sheet/file is missing or unreadable, in
+    which case callers fall back to the in-code defaults / .env (nothing breaks).
+    """
+    try:
+        if os.environ.get("COMMISSION_NO_TEMPLATE_CONFIG", "").strip():
+            return None      # kill-switch: ignore template config, use in-code / .env
+        from openpyxl import load_workbook
+        if not Path(path).exists():
+            return None
+        wb = load_workbook(path, data_only=True, read_only=True)
+        if "Config_People" not in wb.sheetnames:
+            wb.close()
+            return None
+        ws = wb["Config_People"]
+        reps: list[tuple[str, str]] = []
+        company: list[str] = []
+        executive: list[str] = []
+        non_sal: set[str] = set()
+        inactive: set[str] = set()
+        b2c: set[str] = set()
+        aliases: dict[str, str] = {}
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0 or not row or not row[0]:
+                continue
+            full = str(row[0]).strip()
+            role = str(row[1] or "").strip().lower()
+            sheet = str(row[2] or "").strip() if len(row) > 2 else ""
+            pay = str(row[3] or "").strip().lower() if len(row) > 3 else ""
+            if not full or not role:
+                continue
+            if role == "rep" and sheet:
+                reps.append((sheet, full))
+                if pay == "non_salaried":
+                    non_sal.add(sheet)
+            elif role == "company":
+                company.append(full)
+                if sheet:
+                    aliases[full] = sheet
+            elif role == "executive":
+                executive.append(full)
+            elif role == "inactive":
+                inactive.add(full)
+            elif role == "b2c":
+                b2c.add(full.lower())
+            elif role == "alias" and sheet:
+                aliases[full] = sheet
+        wb.close()
+        if not reps:                      # empty / garbled -> use code defaults
+            return None
+        return {
+            "reps": reps, "non_salaried": non_sal, "company": company,
+            "executive": executive, "inactive": inactive, "b2c": b2c, "aliases": aliases,
+        }
+    except Exception:
+        return None
+
+
+# Business config (the template's Config_People sheet) overrides the in-code
+# defaults / .env when present. Falls back silently to the in-code values.
+_TPL_PEOPLE = _load_people_config_from_template()
+if _TPL_PEOPLE:
+    _TPL_REPS: list[tuple[str, str]] | None = _TPL_PEOPLE["reps"]
+    NON_SALARIED_SHEETS = frozenset(_TPL_PEOPLE["non_salaried"])
+    KNOWN_INACTIVE_NAMES = frozenset(_TPL_PEOPLE["inactive"])
+    B2C_COUPON_REPS = frozenset(_TPL_PEOPLE["b2c"])
+    COMPANY_ACCOUNT_NAMES = list(_TPL_PEOPLE["company"])
+    EXECUTIVE_ACCOUNT_NAMES = list(_TPL_PEOPLE["executive"])
+    SPECIAL_PERSON_ROUTING = _build_special_routing()
+else:
+    _TPL_REPS = None
 
 
 ALL_SHEETS_ORDERED, SALESPERSON_FULL_TO_SHEET, ROSTER_SHEETS = build_catalog()
@@ -284,6 +368,24 @@ def issue_found(row: dict[str, Any]) -> str:
     if "PRICE_ANOMALY" in flags:
         return "Possible ticket / price anomaly — invoiced far above MAP"
 
+    # Lower-side MAP anomaly: resolved snapshot/R_LP MAP suspiciously below items.rate
+    if "MAP_ANOMALY_LOW" in flags:
+        return "Resolved MAP unusually low vs. live item rate — possible snapshot typo"
+
+    # No sale date to apply a snapshot
+    if "MISSING_SALE_DATE" in flags:
+        return "No SO/Invoice/Shipment date — snapshot MAP could not be applied"
+
+    # SKU has price_history rows but none cover the sale date
+    if "PRICE_HISTORY_NO_WINDOW" in flags:
+        return "SKU has snapshot rows but none cover the sale date — used fallback MAP"
+
+    # Discount above the commission-table limit
+    if "DISCOUNT_OVER_60" in flags:
+        return "Discount over 60% — non-commissionable"
+    if "DISCOUNT_OVER_30" in flags:
+        return "Discount above commission table limit"
+
     # Adjustment salesperson not resolved
     if "ADJ_SALESPERSON_NOT_IN_ROSTER" in flags:
         return "Adjusted salesperson name not found in roster — check spelling"
@@ -347,6 +449,24 @@ def suggested_action(row: dict[str, Any]) -> str:
     # Possible ticket via price anomaly
     if "PRICE_ANOMALY" in flags:
         return "Verify invoice — likely a ticket/keying error; exclude if it is a ticket, else approve"
+
+    # Lower-side MAP anomaly
+    if "MAP_ANOMALY_LOW" in flags:
+        return "Verify the snapshot price for this SKU; if wrong, correct price_history and re-run"
+
+    # No sale date for snapshot
+    if "MISSING_SALE_DATE" in flags:
+        return "Resolve SO/Invoice/Shipment date or accept fallback MAP; approve manually"
+
+    # snapshot rows exist but no covering window
+    if "PRICE_HISTORY_NO_WINDOW" in flags:
+        return "Verify fallback MAP for this sale date; consider loading a covering snapshot"
+
+    # Discount above the commission-table limit
+    if "DISCOUNT_OVER_60" in flags:
+        return "Non-commissionable — do not pay unless management approves"
+    if "DISCOUNT_OVER_30" in flags:
+        return "Confirm written approval and applicable commission rate"
 
     # Adjustment salesperson typo
     if "ADJ_SALESPERSON_NOT_IN_ROSTER" in flags:

@@ -15,9 +15,9 @@ const round2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
 
 // ---- Field help text (tooltips) ------------------------------------------
 const TIP = {
-  calc: "Calculated Commission — what the system computed automatically from Zoho data (includes pending/unassigned lines), before any accounting decision.",
-  final: "Final Commission — what will actually be paid after your accounting decisions are applied.",
-  change: "Change — the difference between Calculated and Final commission caused by your decision.",
+  calc: "Total to Pay (calculated) — engine payable total (rep + Bruce), matching B2B Summary / Check A+B. Not the sum of every audit-line system amount.",
+  final: "Total to Pay (final) — what will actually be paid after accounting decisions (same as B2B Summary when no adjustments).",
+  change: "Change — difference between calculated and final Total to Pay (non-zero only after accounting adjustments).",
   needsReview: "Needs Review — this line cannot be finalized until Accounting makes a decision (e.g. assign a salesperson or classify the account).",
   exclude: "Exclude from Commission — remove this line from commission entirely. Its Final Commission becomes $0.",
   category: "Accounting Category — move this line to the Company Account or Executive Account instead of a salesperson.",
@@ -32,18 +32,113 @@ const TIP = {
   acctCat: "Accounting Category — Company Account or Executive Account when the line was moved off a rep.",
 };
 
+// ---- Management review categories (Phase B, surfaced from backend Phase A) ----
+// Single source of truth for the chip / badge / filter labels and ordering.
+// `id` matches the backend category_tags value (or 'over_5000_review' which is the
+// virtual API-time tag from /api/adjustments/lines). Ordering here defines:
+//   (a) chip rendering order on the toolbar
+//   (b) "primary category" tiebreak when a line has multiple tags (first match wins).
+// Excluding ones come first (red), then held (yellow), then informational (gray/blue).
+const CATEGORY_DEFS = [
+  { id: "ticket",             label: "Tickets",            short: "Ticket",        color: "red"    },
+  { id: "return",             label: "Returns",            short: "Return",        color: "red"    },
+  { id: "discount_excluded",  label: "Discount >60%",      short: ">60% Excluded", color: "red"    },
+  { id: "executive_account",  label: "Executive Account",  short: "Executive",     color: "blue"   },
+  { id: "discount_review",    label: "Discount 30-60%",    short: "30-60% Hold",   color: "yellow" },
+  { id: "inactive_unmatched", label: "Inactive/Unassigned",short: "Inactive",      color: "yellow" },
+  { id: "price_map_issue",    label: "Price/MAP Issue",    short: "MAP Issue",     color: "yellow" },
+  { id: "over_5000_review",   label: "Over $5K Review",    short: ">$5K",          color: "gray"   },
+  { id: "unpaid_info",        label: "Unpaid (info)",      short: "Unpaid",        color: "gray"   },
+  { id: "company_account",    label: "Company Account",    short: "Company",       color: "blue"   },
+];
+const CATEGORY_DEF_BY_ID = Object.fromEntries(CATEGORY_DEFS.map((d) => [d.id, d]));
+
+// Mirrors backend `_CATEGORY_TAG_MAP` in sqlite_to_workbook.py — used when the API
+// response predates Phase A (category_tags null) or the backend was not restarted.
+const FLAG_TO_CATEGORY_TAG = [
+  ["TICKET_NUMBER", "ticket"],
+  ["FULLY_RETURNED", "return"],
+  ["PARTIALLY_RETURNED", "return"],
+  ["KNOWN_INACTIVE", "inactive_unmatched"],
+  ["UNASSIGNED", "inactive_unmatched"],
+  ["DISCOUNT_OVER_30", "discount_review"],
+  ["DISCOUNT_OVER_60", "discount_excluded"],
+  ["UNPAID", "unpaid_info"],
+  ["COMPANY_ACCOUNT", "company_account"],
+  ["EXECUTIVE_ACCOUNT", "executive_account"],
+  ["PRICE_HISTORY_NO_WINDOW", "price_map_issue"],
+  ["MISSING_MAP", "price_map_issue"],
+  ["MAP_ANOMALY_LOW", "price_map_issue"],
+];
+
+function categoryTagsFromFlags(flagsStr) {
+  if (!flagsStr) return [];
+  const flagSet = new Set(String(flagsStr).split(",").map((s) => s.trim()).filter(Boolean));
+  const tags = [];
+  const seen = new Set();
+  for (const [flag, tag] of FLAG_TO_CATEGORY_TAG) {
+    if (flagSet.has(flag) && !seen.has(tag)) {
+      tags.push(tag);
+      seen.add(tag);
+    }
+  }
+  return tags;
+}
+
+function rowCategories(r, soRevenueByOrder = null) {
+  const tags = Array.isArray(r.category_tags) && r.category_tags.length
+    ? r.category_tags.slice()
+    : categoryTagsFromFlags(r.flags);
+  const over5000 = r.over_5000_review ?? (
+    r.sales_order && soRevenueByOrder && (soRevenueByOrder[r.sales_order] || 0) > 5000
+  );
+  if (over5000 && !tags.includes("over_5000_review")) tags.push("over_5000_review");
+  return tags;
+}
+
+function primaryCategoryDef(r, soRevenueByOrder = null) {
+  const tags = rowCategories(r, soRevenueByOrder);
+  // CATEGORY_DEFS ordering encodes priority -- first hit wins.
+  for (const def of CATEGORY_DEFS) {
+    if (tags.includes(def.id)) return def;
+  }
+  return null;
+}
+
+// Per-line implied discount = 1 - revenue/(map*qty). Returns null if not computable.
+function discountPct(r) {
+  const map = Number(r.map) || 0;
+  const qty = Number(r.qty_commissionable || r.qty_invoiced || r.quantity) || 0;
+  const rev = Number(r.revenue) || 0;
+  if (map <= 0 || qty <= 0) return null;
+  return 1 - rev / (map * qty);
+}
+
 // ---- Derived line state / issue / action ---------------------------------
 function lineState(r) {
-  if (r.excluded) return { key: "excluded", label: "Excluded", color: "red" };
+  // Excluded -- preserve category context in the label (Ticket / Return / >60% / Exec).
+  if (r.excluded) {
+    const def = primaryCategoryDef(r);
+    const label = def && def.color === "red" ? `Excluded — ${def.short}`
+      : def && def.id === "executive_account" ? "Executive Account"
+      : "Excluded";
+    const color = def && def.id === "executive_account" ? "blue" : "red";
+    return { key: "excluded", label, color };
+  }
   const cls = (r.classification || "").toLowerCase();
   if (cls === "company") return { key: "company", label: "Company Account", color: "blue" };
   if (cls === "executive") return { key: "executive", label: "Executive Account", color: "blue" };
   const appr = (r.approval_status || "").toLowerCase();
   if (appr === "approved") return { key: "approved", label: "Approved", color: "green" };
-  if (r.pending) return { key: "needs", label: "Needs Review", color: "yellow" };
+  if (r.pending) {
+    const def = primaryCategoryDef(r);
+    const label = def && def.color === "yellow" ? `Needs Review — ${def.short}` : "Needs Review";
+    return { key: "needs", label, color: "yellow" };
+  }
   const flags = String(r.flags || "");
-  if (flags.includes("MISSING_MAP") || flags.includes("UNPAID") ||
-      flags.includes("PRICE_ANOMALY") || flags.includes("NEGATIVE_BALANCE")) {
+  // UNPAID is informational ONLY -- engine still pays. Show a gray pill, NOT yellow.
+  // Removing it from the yellow override list per Phase B spec #5.
+  if (flags.includes("MISSING_MAP") || flags.includes("PRICE_ANOMALY") || flags.includes("NEGATIVE_BALANCE")) {
     return { key: "needs", label: "Needs Review", color: "yellow" };
   }
   return { key: "ready", label: "Ready", color: "gray" };
@@ -53,8 +148,16 @@ function issueFound(r) {
   if (r.issue_found) return r.issue_found;
   const flags = String(r.flags || "");
   const team = String(r.sales_team || "").toLowerCase();
+  if (flags.includes("TICKET_NUMBER")) return "Ticket — non-commissionable";
   if (flags.includes("FULLY_RETURNED")) return "Fully returned — not commissionable";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partially returned";
+  if (flags.includes("DISCOUNT_OVER_60")) return "Discount over 60% — non-commissionable";
+  if (flags.includes("DISCOUNT_OVER_30")) return "Discount 30-60% — held for review";
+  if (flags.includes("KNOWN_INACTIVE")) return "Salesperson inactive — held for review";
+  if (flags.includes("EXECUTIVE_ACCOUNT")) return "Executive account — $0 commission";
+  if (flags.includes("COMPANY_ACCOUNT")) return "Company Account / Bruce";
+  if (flags.includes("PRICE_HISTORY_NO_WINDOW")) return "Snapshot exists but does not cover sale date";
+  if (flags.includes("MAP_ANOMALY_LOW")) return "MAP unusually low vs items.rate — verify";
   if (r.pending && (team.includes("exe") || team.includes("comp")))
     return "Company / Executive account needs classification";
   if (r.pending && (r.original_zoho_salesperson === "(missing in Zoho)"))
@@ -63,7 +166,8 @@ function issueFound(r) {
     return "Salesperson not in commission roster";
   if (r.pending) return "Missing salesperson assignment";
   if (flags.includes("MISSING_MAP")) return "MAP / discount difference";
-  if (flags.includes("UNPAID")) return "Invoice not paid yet";
+  // UNPAID is informational ONLY (engine pays). Show as info, not issue.
+  if (flags.includes("UNPAID")) return "Unpaid (informational — still paid by system)";
   if (r.block === "shipping") return "Shipping line";
   if (r.section === "II") return "Prior-period order";
   return "";
@@ -73,15 +177,23 @@ function suggestedAction(r) {
   if (r.suggested_action) return r.suggested_action;
   const team = String(r.sales_team || "").toLowerCase();
   const flags = String(r.flags || "");
+  if (flags.includes("TICKET_NUMBER")) return "Review ticket — usually non-commissionable; exclude or approve manually";
   if (flags.includes("FULLY_RETURNED")) return "Returned — verify $0 commission";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partial return — verify kept qty";
+  if (flags.includes("DISCOUNT_OVER_60")) return "Non-commissionable — do not pay unless management approves";
+  if (flags.includes("DISCOUNT_OVER_30")) return "Confirm written approval and applicable rate";
+  if (flags.includes("KNOWN_INACTIVE")) return "Assign to active rep, classify, or exclude";
+  if (flags.includes("EXECUTIVE_ACCOUNT")) return "Track revenue; no commission unless exception approved";
+  if (flags.includes("COMPANY_ACCOUNT")) return "Review only if exception";
+  if (flags.includes("PRICE_HISTORY_NO_WINDOW")) return "Verify fallback MAP; consider loading a covering snapshot";
+  if (flags.includes("MAP_ANOMALY_LOW")) return "Verify snapshot price for this SKU";
   if (r.pending && (team.includes("exe") || team.includes("comp"))) return "Classify as Company / Executive";
   if (r.pending && (r.original_zoho_salesperson === "(missing in Zoho)")) return "Assign salesperson";
   if (r.pending && flags.includes("UNASSIGNED"))
     return "Classify as Company Account, Executive Account, Bruce Commission, assign to a salesperson, or add to roster";
   if (r.pending) return "Assign salesperson";
-  if (String(r.flags || "").includes("MISSING_MAP")) return "Review MAP / discount";
-  if (String(r.flags || "").includes("UNPAID")) return "Confirm payment, then approve";
+  if (flags.includes("MISSING_MAP")) return "Review MAP / discount";
+  if (flags.includes("UNPAID")) return "Will pay when collected — no action required";
   if (r.excluded) return "Review exclusion";
   if ((r.approval_status || "").toLowerCase() === "approved") return "—";
   return "Approve if correct";
@@ -98,15 +210,21 @@ function zohoSalesperson(r) {
   return sys || "—";
 }
 
-const VIEWS = [
-  ["needs", "Needs Review"],
-  ["all", "All lines"],
+// State-level chips (4) + 10 management-category chips appended from CATEGORY_DEFS.
+// Each entry is [chipKey, displayLabel, optional helper to test row membership].
+const STATE_VIEWS = [
+  ["all",      "All lines"],
+  ["needs",    "Needs Review"],
   ["approved", "Approved"],
   ["excluded", "Excluded"],
-  ["company_exec", "Company / Executive"],
+];
+const VIEWS = [
+  ...STATE_VIEWS,
+  // Category chips: keyed as `cat:<id>` so filter logic can dispatch on prefix.
+  ...CATEGORY_DEFS.map((d) => [`cat:${d.id}`, d.label]),
 ];
 
-const BLANK_FILTERS = { salesperson: "", sales_team: "", issue: "", action: "", sales_order: "", invoice: "", sku: "" };
+const BLANK_FILTERS = { salesperson: "", sales_team: "", issue: "", action: "", sales_order: "", invoice: "", sku: "", category: "" };
 
 function Tip({ text, children }) {
   return (
@@ -214,6 +332,7 @@ export default function AdjustmentsView() {
   const [view, setView] = useState("needs");
   const [filters, setFilters] = useState(BLANK_FILTERS);
   const [rows, setRows] = useState([]);
+  const [kpis, setKpis] = useState({});
   const [roster, setRoster] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingPeriod, setLoadingPeriod] = useState(false);
@@ -234,8 +353,9 @@ export default function AdjustmentsView() {
     try {
       const data = await readJson(await apiFetch(`${API}/adjustments/lines?year=${year}&month=${month}`));
       setRows(data.rows || []);
+      setKpis(data.kpis || {});
       setRoster(data.roster || []);
-    } catch (err) { setError(err); setRows([]); }
+    } catch (err) { setError(err); setRows([]); setKpis({}); }
     finally { setLoading(false); setLoadingPeriod(false); }
   }
 
@@ -251,14 +371,29 @@ export default function AdjustmentsView() {
   const issueOptions = useMemo(() => [...new Set(rows.map(issueFound).filter(Boolean))].sort(), [rows]);
   const actionOptions = useMemo(() => [...new Set(rows.map(suggestedAction).filter((a) => a && a !== "—"))].sort(), [rows]);
 
+  const soRevenueByOrder = useMemo(() => {
+    const m = {};
+    for (const r of rows) {
+      const so = r.sales_order;
+      if (so) m[so] = (m[so] || 0) + (Number(r.revenue) || 0);
+    }
+    return m;
+  }, [rows]);
+
   const filtered = useMemo(() => {
     const inc = (hay, needle) => String(hay || "").toLowerCase().includes(needle.toLowerCase());
     let list = rows.filter((r) => {
       const st = lineState(r).key;
+      // State-level chips
       if (view === "needs" && st !== "needs") return false;
       if (view === "approved" && st !== "approved") return false;
       if (view === "excluded" && st !== "excluded") return false;
-      if (view === "company_exec" && !(st === "company" || st === "executive")) return false;
+      // Category-level chips: 'cat:<tag-id>' filters by category_tags / over_5000_review membership
+      if (typeof view === "string" && view.startsWith("cat:")) {
+        const catId = view.slice(4);
+        if (!rowCategories(r, soRevenueByOrder).includes(catId)) return false;
+      }
+      if (filters.category && !rowCategories(r, soRevenueByOrder).includes(filters.category)) return false;
       if (filters.salesperson && finalAssignment(r) !== filters.salesperson && zohoSalesperson(r) !== filters.salesperson) return false;
       if (filters.sales_team && r.sales_team !== filters.sales_team) return false;
       if (filters.issue && issueFound(r) !== filters.issue) return false;
@@ -271,19 +406,37 @@ export default function AdjustmentsView() {
     // Needs Review first, then by salesperson.
     const rank = (r) => (lineState(r).key === "needs" ? 0 : r.pending ? 1 : 2);
     return list.sort((a, b) => rank(a) - rank(b) || String(a.salesperson).localeCompare(String(b.salesperson)));
-  }, [rows, view, filters]);
+  }, [rows, view, filters, soRevenueByOrder]);
 
   const totals = useMemo(() => {
-    let sys = 0, fin = 0, adj = 0, needs = 0, exc = 0;
+    let adj = 0, needs = 0, exc = 0;
     for (const r of rows) {
-      sys += r.system_commission || 0;
-      fin += r.final_commission || 0;
       if (r.adjusted) adj += 1;
       if (lineState(r).key === "needs") needs += 1;
       if (r.excluded) exc += 1;
     }
+    const finPayable = Number(kpis.total_commission);
+    const pendingLines = Number(kpis.pending_lines);
+    if (Number.isFinite(finPayable)) {
+      const hasAdj = adj > 0 || (Number(kpis.adjusted_lines) || 0) > 0;
+      const fin = round2(finPayable);
+      const sys = hasAdj ? round2(finPayable + (Number(kpis.pending_commission) || 0)) : fin;
+      return {
+        sys,
+        fin,
+        delta: hasAdj ? round2(fin - sys) : 0,
+        adj,
+        needs: Number.isFinite(pendingLines) ? pendingLines : needs,
+        exc,
+      };
+    }
+    let sys = 0, fin = 0;
+    for (const r of rows) {
+      sys += r.system_commission || 0;
+      fin += r.final_commission || 0;
+    }
     return { sys, fin, delta: fin - sys, adj, needs, exc };
-  }, [rows]);
+  }, [rows, kpis]);
 
   // ---- drawer ----
   function openEdit(row, preset = {}) {
@@ -495,17 +648,35 @@ export default function AdjustmentsView() {
       {/* View chips + legend */}
       <section className="card">
         <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          <div className="adj-chips">
-            {VIEWS.map(([k, lbl]) => {
-              const count = k === "all" ? rows.length : rows.filter((r) => {
-                const st = lineState(r).key;
-                if (k === "company_exec") return st === "company" || st === "executive";
-                return st === k;
-              }).length;
+          <div className="adj-chips" style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", alignItems: "center" }}>
+            {VIEWS.map(([k, lbl], idx) => {
+              let count;
+              if (k === "all") count = rows.length;
+              else if (typeof k === "string" && k.startsWith("cat:")) {
+                const catId = k.slice(4);
+                count = rows.filter((r) => rowCategories(r, soRevenueByOrder).includes(catId)).length;
+              } else {
+                count = rows.filter((r) => lineState(r).key === k).length;
+              }
+              const isCategory = typeof k === "string" && k.startsWith("cat:");
+              const def = isCategory ? CATEGORY_DEF_BY_ID[k.slice(4)] : null;
+              const colorClass = def ? `chip-${def.color}` : "";
+              // Insert a small visual divider before the first category chip.
+              const isFirstCategory = isCategory && VIEWS.findIndex((v) => typeof v[0] === "string" && v[0].startsWith("cat:")) === idx;
               return (
-                <button key={k} type="button" className={`chip ${view === k ? "chip-active" : ""}`} onClick={() => setView(k)}>
-                  {lbl} <span className="chip-count">{count}</span>
-                </button>
+                <React.Fragment key={k}>
+                  {isFirstCategory && (
+                    <span aria-hidden="true" style={{ color: "var(--bb-muted, #999)", padding: "0 0.25rem", fontSize: 12 }}>·</span>
+                  )}
+                  <button
+                    type="button"
+                    className={`chip ${colorClass} ${view === k ? "chip-active" : ""}`}
+                    title={isCategory ? `Filter to: ${lbl}` : lbl}
+                    onClick={() => setView(k)}
+                  >
+                    {lbl} <span className="chip-count">{count}</span>
+                  </button>
+                </React.Fragment>
               );
             })}
           </div>
@@ -539,6 +710,16 @@ export default function AdjustmentsView() {
                 {actionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            <div className="field" style={{ minWidth: 150, flex: "1 1 150px" }}>
+              <label className="field-label">Category</label>
+              <select className="select" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
+                <option value="">All categories</option>
+                {CATEGORY_DEFS.map((d) => {
+                  const n = rows.filter((r) => rowCategories(r, soRevenueByOrder).includes(d.id)).length;
+                  return <option key={d.id} value={d.id}>{d.label} ({n})</option>;
+                })}
+              </select>
+            </div>
             <div className="field" style={{ minWidth: 110, flex: "1 1 110px" }}>
               <label className="field-label">Invoice</label>
               <input className="input" value={filters.invoice} onChange={(e) => setFilters({ ...filters, invoice: e.target.value })} placeholder="search…" />
@@ -548,10 +729,10 @@ export default function AdjustmentsView() {
 
           <div className="adj-legend">
             <span><i className="dot dot-green" /> Approved</span>
-            <span><i className="dot dot-yellow" /> Needs Review</span>
-            <span><i className="dot dot-red" /> Excluded</span>
+            <span><i className="dot dot-yellow" /> Needs Review (held)</span>
+            <span><i className="dot dot-red" /> Excluded (non-commissionable)</span>
             <span><i className="dot dot-blue" /> Company / Executive</span>
-            <span><i className="dot dot-gray" /> Informational</span>
+            <span><i className="dot dot-gray" /> Informational (still paid)</span>
           </div>
         </div>
       </section>
@@ -574,6 +755,7 @@ export default function AdjustmentsView() {
               <thead>
                 <tr>
                   <th>Status</th>
+                  <th title="Management review categories derived from engine flags + over_5000_review">Categories</th>
                   <th><Tip text={TIP.zohoSp}>Original Zoho</Tip></th>
                   <th><Tip text={TIP.finalAssign}>Final Assignment</Tip></th>
                   <th>Customer</th>
@@ -582,6 +764,7 @@ export default function AdjustmentsView() {
                   <th className="cell-number"><Tip text={TIP.calc}>Calculated</Tip></th>
                   <th className="cell-number"><Tip text={TIP.change}>Change</Tip></th>
                   <th className="cell-number"><Tip text={TIP.final}>Final</Tip></th>
+                  <th className="cell-number" title="Per-line implied discount = 1 − revenue / (MAP × qty)">Disc %</th>
                   <th>Issue Found</th>
                   <th>Suggested Action</th>
                   <th>Quick Actions</th>
@@ -590,19 +773,61 @@ export default function AdjustmentsView() {
               <tbody>
                 {filtered.map((r, i) => {
                   const issue = issueFound(r);
+                  const cats = rowCategories(r, soRevenueByOrder);
+                  const disc = discountPct(r);
+                  const retStatus = r.return_status || "";
                   return (
                     <tr key={r.line_uid + i} className={lineState(r).key === "needs" ? "row-needs" : ""}>
-                      <td>{badge(r)}</td>
+                      <td title={String(r.flags || "")}>{badge(r)}</td>
+                      <td>
+                        {cats.length === 0 ? (
+                          <span className="text-faint">—</span>
+                        ) : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {cats.map((id) => {
+                              const def = CATEGORY_DEF_BY_ID[id];
+                              if (!def) return null;
+                              return (
+                                <span key={id} className={`badge badge-${def.color}`} style={{ fontSize: 11, padding: "1px 6px" }} title={def.label}>
+                                  {def.short}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </td>
                       <td className="cell-trunc" title={zohoSalesperson(r)}>{zohoSalesperson(r)}</td>
                       <td>{finalAssignment(r)}</td>
                       <td className="cell-trunc" title={r.customer}>{r.customer}</td>
-                      <td><div>{r.sales_order}</div><div className="text-faint" style={{ fontSize: 11 }}>{r.invoice}</div></td>
-                      <td className="cell-trunc" title={r.item_name}>{r.sku}</td>
+                      <td>
+                        <div>{r.sales_order}</div>
+                        <div className="text-faint" style={{ fontSize: 11 }}>{r.invoice}</div>
+                        {(r.over_5000_review || (r.sales_order && (soRevenueByOrder[r.sales_order] || 0) > 5000)) && (
+                          <div style={{ marginTop: 2 }}>
+                            <span className="badge badge-gray" style={{ fontSize: 10, padding: "0 5px" }} title="Sales order revenue total exceeds $5,000 (informational annotation; does not affect commission)">
+                              &gt;$5K
+                            </span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="cell-trunc" title={r.item_name}>
+                        <div>{r.sku}</div>
+                        {retStatus && (
+                          <div style={{ marginTop: 2 }}>
+                            <span className="badge badge-red" style={{ fontSize: 10, padding: "0 5px" }} title="Return status">
+                              {retStatus}
+                            </span>
+                          </div>
+                        )}
+                      </td>
                       <td className="cell-number">{money(r.system_commission)}</td>
                       <td className="cell-number" style={{ color: r.adjustment < 0 ? "var(--bb-rose)" : r.adjustment > 0 ? "var(--bb-emerald)" : "inherit" }}>
                         {r.adjustment ? money(r.adjustment) : "—"}
                       </td>
                       <td className="cell-number text-bold">{money(r.final_commission)}</td>
+                      <td className="cell-number" title={disc == null ? "Not computable (MAP or qty is 0)" : `${(disc*100).toFixed(2)}%`}>
+                        {disc == null ? <span className="text-faint">—</span> : `${(disc*100).toFixed(1)}%`}
+                      </td>
                       <td>{issue ? <span className="issue-text">{issue}</span> : <span className="text-faint">—</span>}</td>
                       <td className="text-faint">{suggestedAction(r)}</td>
                       <td>
@@ -619,7 +844,7 @@ export default function AdjustmentsView() {
                   );
                 })}
                 {filtered.length === 0 && !loading && (
-                  <tr><td colSpan={12}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
+                  <tr><td colSpan={14}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
                     <p className="empty-state-title">Nothing to review here</p>
                     <p className="empty-state-desc">Try the "All lines" chip or change the filters.</p></div></td></tr>
                 )}

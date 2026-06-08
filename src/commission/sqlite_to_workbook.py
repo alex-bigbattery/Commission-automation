@@ -67,6 +67,80 @@ FREE_SHIPPING_THRESHOLD = 5000.0
 # at $400k). Flag for review only — never auto-exclude (cf_ticket may be empty).
 PRICE_ANOMALY_FACTOR = 5.0
 
+# Discount-based review thresholds (per Accounting / Jennifer, June 2026).
+# A Ticket# already marks an order non-commissionable (warranty/replacement that
+# was returned and re-shipped on a new invoice -- not a new sale). For lines
+# WITHOUT a ticket, the discount off MAP is the signal:
+#   > DISCOUNT_KILL   -> non-commissionable (not a legitimate sales discount;
+#                        usually an untagged warranty replacement)
+#   > DISCOUNT_REVIEW (30%) -> Needs Review: HELD (pending), NOT paid and NOT
+#                              excluded — above the commission-table limit; needs
+#                              written approval before payout.
+#   > DISCOUNT_KILL  (60%)  -> non-commissionable (excluded).
+# A small epsilon avoids flagging clean 30%/60% deals that compute slightly over
+# the threshold because of MAP rounding.
+DISCOUNT_REVIEW = 0.30
+DISCOUNT_KILL = 0.60
+DISCOUNT_EPSILON = 0.005
+
+# Surfacing-layer mapping from engine flag strings to the 8 management-review
+# categories. Used only to populate the additive `category_tags` field on each
+# audit_row -- never read by the engine, never affects pay, never mutates the raw
+# `flags` field. Multiple flags can map to the same tag (e.g. KNOWN_INACTIVE +
+# UNASSIGNED both -> inactive_unmatched); the tag list is deduplicated while
+# preserving the order below.
+_CATEGORY_TAG_MAP: tuple[tuple[str, str], ...] = (
+    ("TICKET_NUMBER",           "ticket"),
+    ("FULLY_RETURNED",          "return"),
+    ("PARTIALLY_RETURNED",      "return"),
+    ("KNOWN_INACTIVE",          "inactive_unmatched"),
+    ("UNASSIGNED",              "inactive_unmatched"),
+    ("DISCOUNT_OVER_30",        "discount_review"),
+    ("DISCOUNT_OVER_60",        "discount_excluded"),
+    ("UNPAID",                  "unpaid_info"),
+    ("COMPANY_ACCOUNT",         "company_account"),
+    ("EXECUTIVE_ACCOUNT",       "executive_account"),
+    ("PRICE_HISTORY_NO_WINDOW", "price_map_issue"),
+    ("MISSING_MAP",             "price_map_issue"),
+    ("MAP_ANOMALY_LOW",         "price_map_issue"),
+)
+
+
+def _category_tags_from_flags(flags_str: str | None) -> list[str]:
+    """Deterministic, ordered, deduplicated mapping from a flag-string to category
+    tags. Pure function -- no I/O, no side effects, never raises on bad input."""
+    if not flags_str:
+        return []
+    flag_set = {f.strip() for f in str(flags_str).split(",") if f and f.strip()}
+    tags: list[str] = []
+    seen: set[str] = set()
+    for flag, tag in _CATEGORY_TAG_MAP:
+        if flag in flag_set and tag not in seen:
+            tags.append(tag)
+            seen.add(tag)
+    return tags
+
+# Bruce Taylor's commission rates per the payout model. Bruce is paid:
+#   * BRUCE_REP_RATE  x rep_commission_total   (rep-side incentive)
+#   * BRUCE_COMPANY_RATE x company_commission   (company-side, only Bruce gets paid
+#                                                from the Company Account bucket)
+# These constants are the engine-side defaults. The Excel template's B2B Summary
+# sheet at I13/J13/K13 hardcodes the SAME rates as formulas, so changing these
+# constants alone would create a code-vs-template mismatch — keep both in lockstep
+# OR move the template formulas to read from Config_Settings in a separate change.
+# For now: changing the in-code constants without also updating the template would
+# diverge code totals from the Excel-formula totals.
+BRUCE_REP_RATE = 0.15
+BRUCE_COMPANY_RATE = 0.20
+
+# Symmetric lower-side anomaly check for the snapshot/R_LP MAP. A resolved MAP that is
+# much LOWER than the live items.rate (e.g. a decimal-point typo making $100 look like
+# $10) silently shifts every line of that SKU into the wrong discount tier or pushes
+# it into the >30% Needs Review / >60% excluded bands. PRICE_ANOMALY_FACTOR only
+# catches the upper side (item_total >> MAP*qty); this catches the lower side.
+# Trigger: map_price < MAP_ANOMALY_LOW_FACTOR * items.rate AND items.rate > 0.
+MAP_ANOMALY_LOW_FACTOR = 0.5
+
 # Fallback commission tiers (discount_rate, salaried_rate, non_salaried_rate),
 # used only if the template's "Table" sheet can't be read.
 DEFAULT_TIERS: list[tuple[float, float, float]] = [
@@ -213,6 +287,57 @@ def load_map_from_template(template_path: Path | None) -> dict[str, float]:
     return out
 
 
+def load_settings_from_template(template_path: Path | None) -> dict[str, float]:
+    """Business-maintained scalar settings from the template's 'Config_Settings'
+    sheet (col A = key, col B = numeric value). Missing sheet/keys -> {} and the
+    caller keeps the in-code defaults."""
+    out: dict[str, float] = {}
+    if not template_path or not Path(template_path).exists():
+        return out
+    try:
+        wb = load_workbook(template_path, data_only=True)
+        if "Config_Settings" not in wb.sheetnames:
+            wb.close()
+            return out
+        ws = wb["Config_Settings"]
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0 or not row or not row[0]:
+                continue
+            key = str(row[0]).strip().lower()
+            val = row[1] if len(row) > 1 else None
+            if isinstance(val, (int, float)):
+                out[key] = float(val)
+        wb.close()
+    except Exception:
+        return {}
+    return out
+
+
+def _apply_settings_from_template(template_path: Path | None) -> None:
+    """Override the module-level threshold constants from Config_Settings when
+    present (falls back to the in-code defaults for any missing key)."""
+    global FREE_SHIPPING_THRESHOLD, PRICE_ANOMALY_FACTOR, DISCOUNT_REVIEW, DISCOUNT_KILL
+    global MAP_ANOMALY_LOW_FACTOR, DISCOUNT_EPSILON
+    global BRUCE_REP_RATE, BRUCE_COMPANY_RATE
+    s = load_settings_from_template(template_path)
+    if "free_shipping_threshold" in s:
+        FREE_SHIPPING_THRESHOLD = s["free_shipping_threshold"]
+    if "price_anomaly_factor" in s:
+        PRICE_ANOMALY_FACTOR = s["price_anomaly_factor"]
+    if "discount_review" in s:
+        DISCOUNT_REVIEW = s["discount_review"]
+    if "discount_kill" in s:
+        DISCOUNT_KILL = s["discount_kill"]
+    if "map_anomaly_low_factor" in s:
+        MAP_ANOMALY_LOW_FACTOR = s["map_anomaly_low_factor"]
+    if "discount_epsilon" in s:
+        DISCOUNT_EPSILON = s["discount_epsilon"]
+    if "bruce_rep_rate" in s:
+        BRUCE_REP_RATE = s["bruce_rep_rate"]
+    if "bruce_company_rate" in s:
+        BRUCE_COMPANY_RATE = s["bruce_company_rate"]
+
+
 def commission_rate(discount: float, rate_type: str, tiers: list[tuple[float, float, float]]) -> float:
     """Largest tier whose discount <= the line's discount; column by rate_type.
     Tiers MUST be sorted ascending by threshold (index 0) — caller's responsibility.
@@ -291,6 +416,131 @@ def _load_item_map(conn: DbConnection) -> dict[str, float]:
         if sku and sku not in out:  # first = most recently synced
             out[sku] = float(row["rate"] or 0)
     return out
+
+
+def _iso_to_date(value: Any) -> date | None:
+    """Parse a stored 'YYYY-MM-DD' price_history date to a date; None if blank/invalid."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _load_price_history(conn: DbConnection) -> dict[str, list[tuple[date, date, float, bool]]]:
+    """sku(upper) -> [(effective_from, effective_to, map_price, is_live), ...].
+
+    The effective-dated price snapshots used to resolve the *period-correct* MAP for
+    each line by its sale date. Returns {} if the table is missing (older DBs) so the
+    engine cleanly falls back to the curated R_LP / items.rate map. This NEVER reads or
+    overwrites R_LP; it is an independent, additive price source that takes priority.
+
+    The fourth tuple element ``is_live`` is True when ``snapshot_month == 'live'``
+    (a forward-looking Zoho-sync row), False for a closed-month accountant snapshot.
+    The resolver uses this flag to enforce: closed-month snapshots WIN over live rows
+    for any sale date both would cover. So inserting a forever-open live row today
+    cannot retroactively re-price a closed month that has its own snapshot.
+
+    Hardening contract (defense-in-depth on top of schema NOT NULL + UNIQUE):
+      * Skip any row whose ``effective_from``/``effective_to`` does not parse as ISO date.
+      * Skip any row whose ``map_price`` is <= 0.
+      * ``ORDER BY sku, effective_from, id`` so the per-SKU list is deterministic across
+        SQLite and Postgres. Combined with the resolver's non-strict ``>=`` tie-break
+        this guarantees the LATER LOAD (highest id) wins on tied effective_from.
+    """
+    out: dict[str, list[tuple[date, date, float, bool]]] = {}
+    try:
+        rows = conn.execute(
+            "SELECT sku, map_price, effective_from, effective_to, snapshot_month "
+            "FROM price_history WHERE sku IS NOT NULL AND sku != '' "
+            "ORDER BY sku, effective_from, id"
+        ).fetchall()
+    except Exception:
+        return out
+    for row in rows:
+        sku = str(row["sku"]).strip().upper()
+        if not sku:
+            continue
+        eff_from = _iso_to_date(row["effective_from"])
+        eff_to = _iso_to_date(row["effective_to"])
+        if eff_from is None or eff_to is None:
+            # Defense-in-depth: a row that lost its bounds (NULL or non-ISO date) is
+            # NOT used. It cannot silently leak forward/backward in time.
+            continue
+        try:
+            price = float(row["map_price"])
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        is_live = str(row["snapshot_month"] or "").strip().lower() == "live"
+        out.setdefault(sku, []).append((eff_from, eff_to, price, is_live))
+    return out
+
+
+def _sale_date(rec: InvoiceLineRecord) -> date | None:
+    """Sale date for period-correct pricing: Sales Order date first, then Invoice
+    date, then Shipment date (per commission policy)."""
+    return rec.order_date or rec.invoice_date or rec.shipment_date
+
+
+def _resolve_map_price(
+    sku: str,
+    as_of: date | None,
+    price_history: dict[str, list[tuple[date, date, float, bool]]],
+    fallback_map: dict[str, float],
+) -> float:
+    """Period-correct MAP resolution.
+
+    Priority for a sale on ``as_of`` — bucket choice is HARD (no cross-bucket
+    effective_from comparison):
+      1. Closed-month snapshot (snapshot_month != 'live') whose window contains
+         ``as_of``. Latest ``effective_from`` wins inside this bucket; later-load
+         (highest id) wins on tie. **A non-None best_month is returned unconditionally,
+         even if a live row has a more recent effective_from.** Closed months are
+         absolute authority for any date their window covers.
+      2. Live Zoho-sync row (snapshot_month == 'live') whose window contains ``as_of``.
+         Same intra-bucket tie-break (latest effective_from, later-load on tie). Only
+         consulted when best_month is None.
+      3. Fallback map (curated R_LP / items.rate).
+
+    Rationale: once an accountant snapshot is loaded for April, no future Zoho catalog
+    change can re-price April — even if an operator backfills a live row with an
+    effective_from INSIDE April's window. Live Zoho-sync rows only price sale dates
+    that have no closed-month snapshot coverage.
+
+    Defense-in-depth: ``_load_price_history`` only emits entries with non-NULL
+    ``effective_from``/``effective_to`` and positive price, so both date bounds are
+    concrete here. The boundary check is INCLUSIVE on both sides.
+    """
+    entries = price_history.get(sku)
+    if entries and as_of is not None:
+        best_month: tuple[date, float] | None = None  # snapshot_month != 'live'
+        best_live: tuple[date, float] | None = None   # snapshot_month == 'live'
+        for eff_from, eff_to, price, is_live in entries:
+            if eff_from > as_of:
+                continue
+            if as_of > eff_to:
+                continue
+            if price <= 0:
+                continue
+            # Non-strict >= so the LAST iterated row at equal effective_from wins.
+            # Combined with _load_price_history's ORDER BY sku, effective_from, id ASC
+            # this means the highest-id (most recent) load overrides earlier ones —
+            # correction semantics. Separated buckets for month-specific vs live so
+            # closed-month snapshots cannot be shadowed by a later-loaded live row.
+            if is_live:
+                if best_live is None or eff_from >= best_live[0]:
+                    best_live = (eff_from, price)
+            else:
+                if best_month is None or eff_from >= best_month[0]:
+                    best_month = (eff_from, price)
+        if best_month is not None:
+            return best_month[1]
+        if best_live is not None:
+            return best_live[1]
+    return fallback_map.get(sku, 0.0)
 
 
 def _load_invoice_meta_map(conn: DbConnection, year: int, month: int) -> dict[str, dict[str, str]]:
@@ -696,11 +946,14 @@ def build_salespeople_from_sqlite(
     try:
         invoice_lines = _load_invoice_lines_with_context(conn, year, month)
         item_map = _load_item_map(conn)
+        price_history = _load_price_history(conn)
     finally:
         conn.close()
 
     tiers = tiers or DEFAULT_TIERS
-    # Curated MAP (R_LP) overrides the live catalog; catalog fills any gaps.
+    # Fallback MAP: curated R_LP overrides the live catalog; catalog fills any gaps.
+    # price_history (effective-dated snapshots) takes priority over this whole fallback
+    # and is resolved per line by sale date in the loop below.
     map_by_sku = {**item_map, **(rlp_map or {})}
 
     # Order total per SO (all line types) for the $5k free-shipping test.
@@ -768,17 +1021,19 @@ def build_salespeople_from_sqlite(
             in_roster = False
             routing = ROUTING_UNASSIGNED
 
-        # ---- Ticket number detection ----------------------------------------
-        # A populated Ticket# is usually noncommissionable. Per Accounting we
-        # HOLD it out of the payable (pending) for manual review — never pay or
-        # exclude automatically. Released when an adjustment is approved.
+        # ---- Ticket number = warranty/replacement -> NON-COMMISSIONABLE ------
+        # Per Accounting: a Ticket# means the invoice is a warranty/replacement
+        # re-ship of an already-sold item, not a new sale -> excluded
+        # (non-commissionable). Ticket OVERRIDES the discount logic below.
         ticket_hold = _has_ticket_number(rec)
+        excluded_auto = False
         if ticket_hold:
             flags.append("TICKET_NUMBER")
+            excluded_auto = True   # warranty/replacement -> non-commissionable
 
         # Pending unless routed to a real sheet. Executive lines are auto-classified
         # (not pending) but carry $0 commission and land on no sheet.
-        is_pending = ((not in_roster) or ticket_hold) and not executive_route
+        is_pending = (not in_roster) and not executive_route
 
         # Rule 5 — shipping lines
         if rec.line_type == "shipping":
@@ -796,7 +1051,7 @@ def build_salespeople_from_sqlite(
                 continue  # free shipping: drop the $0 shipping line
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
             lines.append(_Line(line_uid, rec, section, "shipping", zoho_sp, sys_sheet, routing,
-                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, classification=auto_cls))
+                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, excluded=excluded_auto, classification=auto_cls))
             continue
 
         # Rule 4 — $0 non-shipping line. Per Accounting these are usually either
@@ -832,11 +1087,57 @@ def build_salespeople_from_sqlite(
         if rec.line_type != "product":
             detail = _build_detail_row(rec, map_price=0.0, comm_rate=0.0, ar_status=ar)
             lines.append(_Line(line_uid, rec, "I", "other", zoho_sp, sys_sheet, routing,
-                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, classification=auto_cls))
+                               0.0, 0.0, 0.0, 0.0, 0.0, detail, flags=flags, pending=is_pending, excluded=excluded_auto, classification=auto_cls))
             continue
 
-        # Product line — compute MAP, discount, commission rate
-        map_price = map_by_sku.get(rec.sku.strip().upper(), 0.0)
+        # Product line — compute MAP, discount, commission rate.
+        # Period-correct: a price_history snapshot effective at the sale date wins;
+        # the curated R_LP / items.rate map is only the fallback.
+        sku_u = rec.sku.strip().upper()
+        as_of = _sale_date(rec)
+        # Hardening flag: the snapshot has a price for this SKU but we have NO sale
+        # date to apply it. _resolve_map_price will fall back to R_LP/items.rate
+        # silently; surface this for review.
+        if as_of is None and sku_u in price_history:
+            flags.append("MISSING_SALE_DATE")
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason="No SO/Invoice/Shipment date — snapshot MAP could not be applied; using fallback",
+            ))
+        map_price = _resolve_map_price(sku_u, as_of, price_history, map_by_sku)
+        # Hardening flag: SKU has price_history entries but NONE cover as_of. The
+        # resolver silently used fallback (R_LP/items.rate) — surface for review so
+        # the reviewer doesn't believe the snapshot was honored when it wasn't.
+        if (as_of is not None and sku_u in price_history
+                and not any(ef <= as_of <= et for (ef, et, pr, _il) in price_history[sku_u])):
+            flags.append("PRICE_HISTORY_NO_WINDOW")
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason=f"price_history has entries for {sku_u} but none cover {as_of.isoformat()} — using fallback",
+            ))
+        # Hardening flag: the resolved MAP is much LOWER than the live items.rate —
+        # likely a typo in the snapshot (e.g. $10 instead of $100). Symmetric to
+        # PRICE_ANOMALY which catches MAP-too-high.
+        items_rate = item_map.get(sku_u, 0.0)
+        if (map_price > 0 and items_rate > 0
+                and map_price < items_rate * MAP_ANOMALY_LOW_FACTOR):
+            flags.append("MAP_ANOMALY_LOW")
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason=f"Resolved MAP {map_price:.2f} is below {MAP_ANOMALY_LOW_FACTOR:.0%} of items.rate {items_rate:.2f} — verify snapshot",
+            ))
         if map_price <= 0:
             flags.append("MISSING_MAP")
             exceptions.append(ReviewItem(
@@ -867,6 +1168,33 @@ def build_salespeople_from_sqlite(
         disc = implied_discount(rec.item_total, map_price, rec.quantity)
         rt = rate_type_for(routing if in_roster else "Paul")
         rate = commission_rate(disc, rt, tiers) if map_price > 0 else 0.0
+        # ---- Discount-based policy (per Accounting / Jennifer, confirmed) ------
+        # Ticket lines are already excluded above (ticket overrides discount).
+        # For the rest, the discount off MAP decides:
+        #   0-30%            -> normal (pays via the tier table).
+        #   > 30% and <= 60% -> NEEDS REVIEW: held (pending) — NOT paid and NOT
+        #                       excluded; above the commission-table limit, needs
+        #                       written approval before payout.
+        #   > 60%            -> non-commissionable (excluded).
+        if map_price > 0 and not excluded_auto:
+            if disc > DISCOUNT_KILL + DISCOUNT_EPSILON:
+                flags.append("DISCOUNT_OVER_60")
+                excluded_auto = True
+                exceptions.append(ReviewItem(
+                    salesperson=sys_sheet, invoice_number=rec.invoice_number,
+                    sales_order_number=rec.salesorder_number, sku=rec.sku,
+                    amount=rec.item_total,
+                    reason=f"Discount {disc * 100:.0f}% over 60% -> non-commissionable",
+                ))
+            elif disc > DISCOUNT_REVIEW + DISCOUNT_EPSILON:
+                flags.append("DISCOUNT_OVER_30")
+                is_pending = True   # Needs Review: held, not paid, not excluded
+                exceptions.append(ReviewItem(
+                    salesperson=sys_sheet, invoice_number=rec.invoice_number,
+                    sales_order_number=rec.salesorder_number, sku=rec.sku,
+                    amount=rec.item_total,
+                    reason=f"Discount {disc * 100:.0f}% above commission table limit -> Needs Review (confirm written approval)",
+                ))
         if executive_route:
             rate = 0.0   # Executive Account: revenue tracked, commission = 0
         if ar == "UNPAID":
@@ -897,10 +1225,11 @@ def build_salespeople_from_sqlite(
         comm_amount = round(rec.item_total * factor, 2)
         if ret_status == "Fully Returned":
             flags.append("FULLY_RETURNED")
+            excluded_auto = True   # returns are non-commissionable (excluded, visible/auditable)
             exceptions.append(ReviewItem(
                 salesperson=sys_sheet, invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
-                reason="Returned quantity fully offsets shipped/invoiced quantity",
+                reason="Fully returned -> non-commissionable (excluded)",
             ))
         elif ret_status == "Partially Returned":
             flags.append("PARTIALLY_RETURNED")
@@ -916,7 +1245,7 @@ def build_salespeople_from_sqlite(
         detail.quantity = comm_qty
         lines.append(_Line(line_uid, rec, section, "commissionable", zoho_sp, sys_sheet, routing,
                            map_price, disc, rate, comm_amount, comm_amount * rate,
-                           detail, flags=flags, pending=is_pending, classification=auto_cls))
+                           detail, flags=flags, pending=is_pending, excluded=excluded_auto, classification=auto_cls))
 
     # ---- Phase 2: apply manual adjustments (after calc, before export) ----
     adj_map = get_adjustment_map(year, month, db_path=db_path) if apply_adjustments else {}
@@ -1022,6 +1351,7 @@ def build_salespeople_from_sqlite(
             "block": ln.block,
             "section": ln.section,
             "flags": flags_str,
+            "category_tags": _category_tags_from_flags(flags_str),
             "map": round(ln.detail.map_price, 2),
             "system_commissionable": round(ln.sys_commissionable, 2),
             "system_rate": round(ln.sys_rate, 4),
@@ -1108,15 +1438,22 @@ def _payout_breakdown(totals_by_sheet: dict[str, float]) -> tuple[float, float, 
     """Single source of truth for the payout model (matches B2B Summary template):
       rep      = sum of roster rep sheets (excludes Company Acct)
       company  = NORMAL commission on the Company Acct sheet (Bruce's lines)
-      bruce    = 15% of rep + 20% of company   (template K13 = I13 + J13)
+      bruce    = BRUCE_REP_RATE x rep + BRUCE_COMPANY_RATE x company
+                                                (template K13 = I13 + J13)
       total    = rep + bruce                    (template M10 = K11 + K13)
     The full company normal commission is NOT paid directly — it only feeds
     Bruce's 20%. Returns (rep, company, bruce, total).
+
+    BRUCE_REP_RATE / BRUCE_COMPANY_RATE come from the module-level constants and
+    are overridable via Config_Settings keys ``bruce_rep_rate`` /
+    ``bruce_company_rate``. The Excel template's B2B Summary sheet (I13/J13/K13)
+    encodes the SAME percentages as Excel formulas; keep these constants in
+    lockstep with that template or the engine total and the Excel total diverge.
     """
     reps = [s for s, _ in ALL_SHEETS_ORDERED if s != COMPANY_SHEET]
     rep = round(sum(totals_by_sheet.get(s, 0.0) for s in reps), 2)
     company = round(totals_by_sheet.get(COMPANY_SHEET, 0.0), 2)
-    bruce = round(rep * 0.15 + company * 0.20, 2)
+    bruce = round(rep * BRUCE_REP_RATE + company * BRUCE_COMPANY_RATE, 2)
     total = round(rep + bruce, 2)
     return rep, company, bruce, total
 
@@ -1189,6 +1526,7 @@ def generate_commission_workbook(
 
     tiers = load_tiers_from_template(template_path)
     rlp_map = load_map_from_template(template_path)
+    _apply_settings_from_template(template_path)
     result = build_salespeople_from_sqlite(year, month, db_path=db_path, tiers=tiers, rlp_map=rlp_map)
     recon = _reconciliation_values(result)
     reference_sheets, shipments_present = _period_reference_sheets(year, month, db_path, result)
@@ -1221,6 +1559,7 @@ def generate_salesperson_workbook(
 
     tiers = load_tiers_from_template(template_path)
     rlp_map = load_map_from_template(template_path)
+    _apply_settings_from_template(template_path)
     result = build_salespeople_from_sqlite(year, month, db_path=db_path, tiers=tiers, rlp_map=rlp_map)
     target = next((d for d in result.salespeople if d.name == salesperson_sheet), None)
     if target is None:

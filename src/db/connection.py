@@ -166,6 +166,23 @@ CREATE TABLE IF NOT EXISTS items (
 
 CREATE INDEX IF NOT EXISTS idx_items_sku ON items(sku);
 
+CREATE TABLE IF NOT EXISTS price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT NOT NULL,
+    item_id TEXT,
+    map_price REAL NOT NULL,
+    effective_from TEXT NOT NULL,
+    effective_to TEXT NOT NULL,
+    source TEXT NOT NULL,
+    snapshot_month TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    UNIQUE (sku, effective_from, snapshot_month, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_history_sku ON price_history(sku);
+CREATE INDEX IF NOT EXISTS idx_price_history_sku_eff ON price_history(sku, effective_from);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_price_history_sku_eff_snap_src ON price_history(sku, effective_from, snapshot_month, source);
+
 CREATE TABLE IF NOT EXISTS customer_payments (
     payment_id TEXT PRIMARY KEY,
     payment_number TEXT,
@@ -372,6 +389,23 @@ CREATE TABLE IF NOT EXISTS items (
 
 CREATE INDEX IF NOT EXISTS idx_items_sku ON items(sku);
 
+CREATE TABLE IF NOT EXISTS price_history (
+    id SERIAL PRIMARY KEY,
+    sku TEXT NOT NULL,
+    item_id TEXT,
+    map_price DOUBLE PRECISION NOT NULL,
+    effective_from TEXT NOT NULL,
+    effective_to TEXT NOT NULL,
+    source TEXT NOT NULL,
+    snapshot_month TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    UNIQUE (sku, effective_from, snapshot_month, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_history_sku ON price_history(sku);
+CREATE INDEX IF NOT EXISTS idx_price_history_sku_eff ON price_history(sku, effective_from);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_price_history_sku_eff_snap_src ON price_history(sku, effective_from, snapshot_month, source);
+
 CREATE TABLE IF NOT EXISTS customer_payments (
     payment_id TEXT PRIMARY KEY,
     payment_number TEXT,
@@ -449,6 +483,37 @@ CREATE INDEX IF NOT EXISTS idx_derived_ship_so ON derived_shipments(salesorder_n
 SCHEMA_MIGRATIONS = (
     "ALTER TABLE zoho_sync_runs ADD COLUMN records_inserted INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE zoho_sync_runs ADD COLUMN records_updated INTEGER NOT NULL DEFAULT 0",
+    # price_history: backstop for already-initialized databases (esp. existing Postgres).
+    # On SQLite the table is already created by SCHEMA_SQLITE before migrations run, so this
+    # CREATE TABLE IF NOT EXISTS is a harmless no-op there.
+    "CREATE TABLE IF NOT EXISTS price_history ("
+    "id SERIAL PRIMARY KEY, sku TEXT NOT NULL, item_id TEXT, map_price DOUBLE PRECISION, "
+    "effective_from TEXT, effective_to TEXT, source TEXT, snapshot_month TEXT, captured_at TEXT NOT NULL)",
+    # Hardening: deterministic dup protection on the snapshot identity key.
+    # CREATE UNIQUE INDEX IF NOT EXISTS is portable across SQLite and Postgres. Existing
+    # rows must already be unique on (sku, effective_from, snapshot_month, source) or this
+    # will raise — by design, so a bad re-import fails LOUDLY instead of silently winning.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_price_history_sku_eff_snap_src ON price_history(sku, effective_from, snapshot_month, source)",
+    # Helper (non-unique) indexes for the resolver's lookup-by-SKU pattern. Without
+    # these, an already-initialized Postgres DB (sales_orders exists so SCHEMA_POSTGRES
+    # is skipped) tablescans price_history as it grows beyond a few thousand rows.
+    "CREATE INDEX IF NOT EXISTS idx_price_history_sku ON price_history(sku)",
+    "CREATE INDEX IF NOT EXISTS idx_price_history_sku_eff ON price_history(sku, effective_from)",
+)
+
+# Postgres-only constraint hardening for already-populated databases. SQLite cannot
+# ALTER COLUMN SET NOT NULL on an existing table, so we skip these there — the
+# loader script (scripts/load_price_history_snapshot.py) is the real guard, and fresh
+# SQLite DBs created from SCHEMA_SQLITE already have NOT NULL baked in.
+SCHEMA_MIGRATIONS_PG = (
+    "ALTER TABLE price_history ALTER COLUMN map_price SET NOT NULL",
+    "ALTER TABLE price_history ALTER COLUMN effective_from SET NOT NULL",
+    "ALTER TABLE price_history ALTER COLUMN effective_to SET NOT NULL",
+    "ALTER TABLE price_history ALTER COLUMN source SET NOT NULL",
+    # snapshot_month NOT NULL closes the UNIQUE(sku, eff_from, snapshot_month, source)
+    # loophole: both backends treat NULL as distinct, so a NULL snapshot_month would
+    # let duplicate (sku, eff_from, source) rows slip past the unique index.
+    "ALTER TABLE price_history ALTER COLUMN snapshot_month SET NOT NULL",
 )
 
 
@@ -515,6 +580,17 @@ class DbConnection:
     def commit(self) -> None:
         self._conn.commit()
 
+    def rollback(self) -> None:
+        """Roll back the current transaction. Works for both psycopg and sqlite3.
+
+        Critical for the price_history sync hook: stdlib sqlite3 opens an implicit
+        transaction for DML (UPDATE/INSERT) — without an explicit rollback, a
+        half-applied UPDATE (close-old) followed by a failed INSERT (open-new) would
+        be promoted to durable state by ANY subsequent commit() on the same conn
+        (e.g. repo.finish_sync_run), leaving a live SKU's window dangling.
+        """
+        self._conn.rollback()
+
     def close(self) -> None:
         self._conn.close()
 
@@ -545,6 +621,18 @@ def _apply_schema_migrations(conn: DbConnection) -> None:
             if conn.postgres:
                 conn._conn.rollback()
             if not duplicate_column_error(exc, conn.postgres):
+                raise
+    # Postgres-only NOT NULL hardening on existing price_history rows. Idempotent:
+    # ALTER COLUMN SET NOT NULL on a column that is already NOT NULL is a no-op in
+    # modern Postgres. If any existing row has NULL in those columns, this raises —
+    # that is the desired loud failure: fix the data before continuing.
+    if conn.postgres:
+        for statement in SCHEMA_MIGRATIONS_PG:
+            try:
+                conn.execute(statement)
+                conn.commit()
+            except Exception:
+                conn._conn.rollback()
                 raise
 
 

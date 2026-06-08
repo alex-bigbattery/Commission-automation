@@ -30,6 +30,7 @@ EXPECTED_TABLES = (
     "customer_payment_invoices",
     "manual_adjustments",
     "derived_shipments",
+    "price_history",
 )
 
 

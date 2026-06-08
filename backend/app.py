@@ -576,6 +576,21 @@ def adjustments_lines(
                 return False
         return True
 
+    # Virtual annotation: tag any line whose sales_order's revenue total exceeds
+    # the $5,000 threshold (the same SO-grouping the engine already uses for
+    # FREE_SHIPPING_THRESHOLD). Read-only / API-time only; NEVER written to DB,
+    # NEVER affects commission totals, NEVER mutates the row's `flags` field.
+    # The engine does not read this attribute.
+    OVER_5000_THRESHOLD = 5000.0
+    so_revenue_total: dict[str, float] = {}
+    for r in result.audit_rows:
+        so_key = r.get("sales_order")
+        if so_key:
+            try:
+                so_revenue_total[so_key] = so_revenue_total.get(so_key, 0.0) + float(r.get("revenue") or 0.0)
+            except (TypeError, ValueError):
+                pass
+
     rows = []
     for row in result.audit_rows:
         if not matches(row):
@@ -583,6 +598,10 @@ def adjustments_lines(
         adj = adj_map.get(row["line_uid"])
         merged = dict(row)
         merged["adjustment_record"] = dict(adj) if adj else None
+        so_key = row.get("sales_order")
+        merged["over_5000_review"] = bool(
+            so_key and so_revenue_total.get(so_key, 0.0) > OVER_5000_THRESHOLD
+        )
         rows.append(merged)
 
     return {
@@ -779,6 +798,10 @@ def audit_summary(report_id: str | None = None, year: int | None = None, month: 
     input_counts = {"sales_orders": 0, "invoices": 0, "shipments": 0, "items": 0, "payments": 0}
     source = {"source": "Unknown"}
     has_historical_workbook = False
+    # Phase A: per-management-category aggregation. Computed from live audit_rows
+    # (NOT the legacy Excel sheets above). Read-only -- never writes anywhere and
+    # cannot move money. Empty dict if year+month not provided.
+    category_breakdown: dict[str, dict[str, float]] = {}
     if year and month:
         try:
             period_sqlite = period_counts(year, month)
@@ -796,6 +819,49 @@ def audit_summary(report_id: str | None = None, year: int | None = None, month: 
         period_paths = _period_input_paths(year, month)
         has_historical_workbook = period_paths["b2b"].exists()
         source = _read_period_source(year, month)
+        # Build the live category breakdown. Guarded so a sqlite-data-missing
+        # error never breaks the summary response.
+        try:
+            if has_period_data(year, month):
+                tiers_cb = load_tiers_from_template(MASTER_TEMPLATE)
+                rlp_cb = load_map_from_template(MASTER_TEMPLATE)
+                result_cb = build_salespeople_from_sqlite(
+                    year, month, tiers=tiers_cb, rlp_map=rlp_cb, apply_adjustments=True,
+                )
+                # Pre-compute SO totals once to surface over_5000_review here too
+                so_rev_cb: dict[str, float] = {}
+                for r in result_cb.audit_rows:
+                    so_key = r.get("sales_order")
+                    if so_key:
+                        try:
+                            so_rev_cb[so_key] = so_rev_cb.get(so_key, 0.0) + float(r.get("revenue") or 0.0)
+                        except (TypeError, ValueError):
+                            pass
+
+                def _bump(bucket: str, row: dict) -> None:
+                    cb = category_breakdown.setdefault(
+                        bucket, {"count": 0, "amount_held": 0.0, "amount_paid": 0.0, "revenue": 0.0},
+                    )
+                    cb["count"] += 1
+                    sys_c = float(row.get("system_commission") or 0.0)
+                    fin_c = float(row.get("final_commission") or 0.0)
+                    cb["amount_held"] += round(sys_c - fin_c, 2)
+                    cb["amount_paid"] += fin_c
+                    cb["revenue"] += float(row.get("revenue") or 0.0)
+
+                for row in result_cb.audit_rows:
+                    for tag in (row.get("category_tags") or []):
+                        _bump(tag, row)
+                    so_key = row.get("sales_order")
+                    if so_key and so_rev_cb.get(so_key, 0.0) > 5000.0:
+                        _bump("over_5000_review", row)
+                # Round + finalize
+                for cb in category_breakdown.values():
+                    cb["amount_held"] = round(cb["amount_held"], 2)
+                    cb["amount_paid"] = round(cb["amount_paid"], 2)
+                    cb["revenue"] = round(cb["revenue"], 2)
+        except Exception as exc:
+            category_breakdown = {"__error__": {"count": 0, "amount_held": 0.0, "amount_paid": 0.0, "revenue": 0.0, "error": str(exc)}}
 
     return {
         "report_id": report_path.name,
@@ -816,6 +882,7 @@ def audit_summary(report_id: str | None = None, year: int | None = None, month: 
             "amount_difference_total": round(amount_diff_total, 2),
             "validation_rows": len(validation_rows),
         },
+        "category_breakdown": category_breakdown,
     }
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_PATH = BASE_DIR / ".env"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,6 +40,19 @@ class ZohoConfig:
         if self.books_base_url:
             return self.books_base_url.rstrip("/")
         return f"https://{self.api_domain}/books/v3"
+
+    def safe_summary(self) -> dict[str, Any]:
+        """Auth diagnostic with NO secret values — only presence booleans and
+        the (non-secret) domains/URLs. Safe to log in production."""
+        return {
+            "refresh_token_present": bool(self.refresh_token),
+            "client_id_present": bool(self.client_id),
+            "client_secret_present": bool(self.client_secret),
+            "organization_id_present": bool(self.organization_id),
+            "accounts_domain": self.accounts_domain,
+            "token_url": self.token_url,
+            "api_base_url": self.api_base_url,
+        }
 
 
 class ZohoAuthError(RuntimeError):
@@ -104,6 +120,8 @@ class ZohoBooksClient:
         self.timeout_seconds = timeout_seconds
         self._access_token: str | None = None
         self._access_token_expires_at: float = 0.0
+        # Startup/auth diagnostic — never prints secret values, only presence.
+        logger.info("Zoho OAuth config (no secrets shown): %s", self.config.safe_summary())
 
     def refresh_access_token(self) -> str:
         response = requests.post(
@@ -126,8 +144,19 @@ class ZohoBooksClient:
             ) from exc
 
         if response.status_code >= 400 or "access_token" not in payload:
-            error_code = payload.get("error", "unknown_error")
+            error_code = str(payload.get("error", "unknown_error"))
             message = payload.get("error_description") or payload.get("message") or response.text
+            # Zoho returns "invalid_code" / "invalid_grant" when the REFRESH TOKEN
+            # itself is bad — revoked, expired, for a different client, or a
+            # temporary grant code was pasted in by mistake. The code/flow is fine;
+            # the stored credential must be regenerated once.
+            if error_code.lower() in ("invalid_code", "invalid_grant"):
+                raise ZohoAuthError(
+                    "The Zoho refresh token is invalid or revoked. Generate a new "
+                    "refresh token once and update ZOHO_REFRESH_TOKEN in Render. "
+                    "(A refresh token is long-lived — do NOT use a temporary grant "
+                    f"code here.) Zoho error: {error_code}."
+                )
             raise ZohoAuthError(
                 "Zoho authentication failed while refreshing access token. "
                 f"Error: {error_code}. Details: {message}"
