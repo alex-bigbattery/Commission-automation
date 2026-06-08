@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
+import { apiFetch, downloadApi, readJson } from "../lib/api.js";
 import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconRefresh, IconSearch } from "./Icons.jsx";
 
@@ -287,7 +287,7 @@ export default function PriceHistoryLookup() {
         offset: String(offset),
       });
       if (q.trim()) params.set("q", q.trim());
-      const res = await apiFetch(`${API}/settings/price-history/catalog?${params.toString()}`);
+      const res = await apiFetch(`settings/price-history/catalog?${params.toString()}`);
       const payload = await readJson(res);
       setCatalog({
         results: Array.isArray(payload?.results) ? payload.results : [],
@@ -345,7 +345,7 @@ export default function PriceHistoryLookup() {
     }
     setSearchLoading(true);
     try {
-      const res = await apiFetch(`${API}/settings/price-history/search?q=${encodeURIComponent(trimmed)}&limit=30`);
+      const res = await apiFetch(`settings/price-history/search?q=${encodeURIComponent(trimmed)}&limit=30`);
       const payload = await readJson(res);
       setSearchResults(Array.isArray(payload?.results) ? payload.results : []);
     } catch {
@@ -368,7 +368,7 @@ export default function PriceHistoryLookup() {
       if (monthFilter) params.set("snapshot_month", monthFilter);
       if (dateFrom) params.set("date_from", dateFrom);
       if (dateTo) params.set("date_to", dateTo);
-      const res = await apiFetch(`${API}/settings/price-history?${params.toString()}`);
+      const res = await apiFetch(`settings/price-history?${params.toString()}`);
       const payload = await readJson(res);
       setDetail(payload);
     } catch {
@@ -415,7 +415,7 @@ export default function PriceHistoryLookup() {
         limit: String(matrixPreviewLimit),
         offset: String(safePage * matrixPreviewLimit),
       });
-      const res = await apiFetch(`${API}/settings/price-history/matrix?${params.toString()}`);
+      const res = await apiFetch(`settings/price-history/matrix?${params.toString()}`);
       const payload = await readJson(res);
       setMatrixData(payload);
       setMatrixPage(safePage);
@@ -445,7 +445,7 @@ export default function PriceHistoryLookup() {
     setDetailListError(null);
     try {
       const params = buildDetailListParams({ limit: "500", offset: "0" });
-      const res = await apiFetch(`${API}/settings/price-history/detail-list?${params.toString()}`);
+      const res = await apiFetch(`settings/price-history/detail-list?${params.toString()}`);
       setDetailList(await readJson(res));
     } catch (e) {
       setDetailListError(e);
@@ -458,13 +458,13 @@ export default function PriceHistoryLookup() {
   const exportMatrix = useCallback((format) => {
     const params = buildMatrixParams({ mode: "matrix", format });
     const ext = format === "xlsx" ? "xlsx" : "csv";
-    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, `price_timeline_matrix.${ext}`);
+    return downloadApi(`settings/price-history/export?${params.toString()}`, `price_timeline_matrix.${ext}`);
   }, [buildMatrixParams]);
 
   const exportDetail = useCallback((format) => {
     const params = buildDetailListParams({ mode: "detail", format });
     const ext = format === "xlsx" ? "xlsx" : "csv";
-    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, `price_history_detail.${ext}`);
+    return downloadApi(`settings/price-history/export?${params.toString()}`, `price_history_detail.${ext}`);
   }, [buildDetailListParams]);
 
   useEffect(() => {

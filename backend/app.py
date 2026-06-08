@@ -1222,6 +1222,7 @@ def settings_roster() -> dict:
 
 
 @app.get("/api/settings/price-history/search")
+@app.get("/settings/price-history/search")
 def settings_price_history_search(
     q: str = Query(""),
     limit: int = Query(25, ge=1, le=100),
@@ -1231,6 +1232,7 @@ def settings_price_history_search(
 
 
 @app.get("/api/settings/price-history/catalog")
+@app.get("/settings/price-history/catalog")
 def settings_price_history_catalog(
     q: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
@@ -1241,6 +1243,7 @@ def settings_price_history_catalog(
 
 
 @app.get("/api/settings/price-history")
+@app.get("/settings/price-history")
 def settings_price_history(
     sku: str | None = None,
     snapshot_month: str | None = None,
@@ -1269,6 +1272,7 @@ def settings_price_history(
 
 
 @app.get("/api/settings/price-history/matrix")
+@app.get("/settings/price-history/matrix")
 def settings_price_history_matrix(
     q: str = Query(""),
     from_date: str | None = Query(None, alias="from"),
@@ -1295,6 +1299,7 @@ def settings_price_history_matrix(
 
 
 @app.get("/api/settings/price-history/detail-list")
+@app.get("/settings/price-history/detail-list")
 def settings_price_history_detail_list(
     q: str = Query(""),
     from_date: str | None = Query(None, alias="from"),
@@ -1313,6 +1318,7 @@ def settings_price_history_detail_list(
 
 
 @app.get("/api/settings/price-history/export")
+@app.get("/settings/price-history/export")
 def settings_price_history_export(
     mode: str = Query("detail", pattern="^(detail|matrix)$"),
     format: str = Query("csv", alias="format", pattern="^(csv|xlsx)$"),
