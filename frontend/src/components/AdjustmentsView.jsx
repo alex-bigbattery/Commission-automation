@@ -41,6 +41,8 @@ const TIP = {
 // Excluding ones come first (red), then held (yellow), then informational (gray/blue).
 const CATEGORY_DEFS = [
   { id: "ticket",             label: "Tickets",            short: "Ticket",        color: "red"    },
+  { id: "ticket_review",      label: "Ticket Review",      short: "Ticket?",       color: "yellow" },
+  { id: "quote_reference",    label: "Quote Ref",          short: "Quote",         color: "gray"   },
   { id: "return",             label: "Returns",            short: "Return",        color: "red"    },
   { id: "discount_excluded",  label: "Discount >60%",      short: ">60% Excluded", color: "red"    },
   { id: "executive_account",  label: "Executive Account",  short: "Executive",     color: "blue"   },
@@ -56,7 +58,9 @@ const CATEGORY_DEF_BY_ID = Object.fromEntries(CATEGORY_DEFS.map((d) => [d.id, d]
 // Mirrors backend `_CATEGORY_TAG_MAP` in sqlite_to_workbook.py — used when the API
 // response predates Phase A (category_tags null) or the backend was not restarted.
 const FLAG_TO_CATEGORY_TAG = [
-  ["TICKET_NUMBER", "ticket"],
+  ["REAL_TICKET", "ticket"],
+  ["OTHER_TICKET_REFERENCE", "ticket_review"],
+  ["QUOTE_REFERENCE_IN_TICKET_FIELD", "quote_reference"],
   ["FULLY_RETURNED", "return"],
   ["PARTIALLY_RETURNED", "return"],
   ["KNOWN_INACTIVE", "inactive_unmatched"],
@@ -148,7 +152,9 @@ function issueFound(r) {
   if (r.issue_found) return r.issue_found;
   const flags = String(r.flags || "");
   const team = String(r.sales_team || "").toLowerCase();
-  if (flags.includes("TICKET_NUMBER")) return "Ticket — non-commissionable";
+  if (flags.includes("REAL_TICKET")) return "Real support ticket present — non-commissionable";
+  if (flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")) return "Quote reference in Ticket# field — not automatically excluded";
+  if (flags.includes("OTHER_TICKET_REFERENCE")) return "Unrecognized Ticket# format — review required";
   if (flags.includes("FULLY_RETURNED")) return "Fully returned — not commissionable";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partially returned";
   if (flags.includes("DISCOUNT_OVER_60")) return "Discount over 60% — non-commissionable";
@@ -177,7 +183,9 @@ function suggestedAction(r) {
   if (r.suggested_action) return r.suggested_action;
   const team = String(r.sales_team || "").toLowerCase();
   const flags = String(r.flags || "");
-  if (flags.includes("TICKET_NUMBER")) return "Review ticket — usually non-commissionable; exclude or approve manually";
+  if (flags.includes("REAL_TICKET")) return "Exclude — real support/warranty ticket (numeric 1–4 digits)";
+  if (flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")) return "No action required — quote reference is not a support ticket";
+  if (flags.includes("OTHER_TICKET_REFERENCE")) return "Review Ticket# format — classify, exclude, or approve manually";
   if (flags.includes("FULLY_RETURNED")) return "Returned — verify $0 commission";
   if (flags.includes("PARTIALLY_RETURNED")) return "Partial return — verify kept qty";
   if (flags.includes("DISCOUNT_OVER_60")) return "Non-commissionable — do not pay unless management approves";

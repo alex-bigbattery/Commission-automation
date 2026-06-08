@@ -35,6 +35,7 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 
 from src.commission.line_classification import classify_line_type
+from src.commission.ticket_classification import apply_ticket_flags
 from src.commission.roster import (
     ALL_SHEETS_ORDERED,
     COMPANY_SHEET,
@@ -68,9 +69,9 @@ FREE_SHIPPING_THRESHOLD = 5000.0
 PRICE_ANOMALY_FACTOR = 5.0
 
 # Discount-based review thresholds (per Accounting / Jennifer, June 2026).
-# A Ticket# already marks an order non-commissionable (warranty/replacement that
-# was returned and re-shipped on a new invoice -- not a new sale). For lines
-# WITHOUT a ticket, the discount off MAP is the signal:
+# Real support tickets (numeric 1–4 digits in CF.Ticket#) are non-commissionable.
+# Quote references (QUO-…) in the Ticket# field are NOT auto-excluded.
+# For lines WITHOUT a real ticket, the discount off MAP is the signal:
 #   > DISCOUNT_KILL   -> non-commissionable (not a legitimate sales discount;
 #                        usually an untagged warranty replacement)
 #   > DISCOUNT_REVIEW (30%) -> Needs Review: HELD (pending), NOT paid and NOT
@@ -90,7 +91,9 @@ DISCOUNT_EPSILON = 0.005
 # UNASSIGNED both -> inactive_unmatched); the tag list is deduplicated while
 # preserving the order below.
 _CATEGORY_TAG_MAP: tuple[tuple[str, str], ...] = (
-    ("TICKET_NUMBER",           "ticket"),
+    ("REAL_TICKET",                     "ticket"),
+    ("OTHER_TICKET_REFERENCE",          "ticket_review"),
+    ("QUOTE_REFERENCE_IN_TICKET_FIELD", "quote_reference"),
     ("FULLY_RETURNED",          "return"),
     ("PARTIALLY_RETURNED",      "return"),
     ("KNOWN_INACTIVE",          "inactive_unmatched"),
@@ -895,20 +898,6 @@ def _resolve_sheet(name: str | None) -> str | None:
     return resolve_roster_sheet(name)
 
 
-def _has_ticket_number(rec) -> bool:  # rec: InvoiceLineRecord
-    """True if the invoice carries a Ticket# (cf_ticket custom field).
-
-    Confirmed from Zoho raw data (June 2026): the authoritative source is the
-    invoice custom field ``cf_ticket`` (label "Ticket#"). A populated value means
-    the order is tied to a support/RC ticket, which Accounting says is *usually*
-    noncommissionable even if paid — so this is a REVIEW flag, never an automatic
-    exclusion. Verified that B2B and Exe./Comp. Account invoices do carry tickets
-    (e.g. April 2026 B2B invoice with cf_ticket=571), so the rule is not redundant
-    with CF.Sales Team routing.
-    """
-    return bool((rec.ticket_number or "").strip())
-
-
 def _route_from_zoho(
     full_name: str,
     data_by_sheet: dict[str, SalespersonData],
@@ -1021,19 +1010,38 @@ def build_salespeople_from_sqlite(
             in_roster = False
             routing = ROUTING_UNASSIGNED
 
-        # ---- Ticket number = warranty/replacement -> NON-COMMISSIONABLE ------
-        # Per Accounting: a Ticket# means the invoice is a warranty/replacement
-        # re-ship of an already-sold item, not a new sale -> excluded
-        # (non-commissionable). Ticket OVERRIDES the discount logic below.
-        ticket_hold = _has_ticket_number(rec)
+        # ---- Ticket# classification (cf_ticket on invoice) -------------------
         excluded_auto = False
-        if ticket_hold:
-            flags.append("TICKET_NUMBER")
-            excluded_auto = True   # warranty/replacement -> non-commissionable
+        ticket_excluded, ticket_pending = apply_ticket_flags(
+            (rec.ticket_number or "").strip(), flags
+        )
+        if ticket_excluded:
+            excluded_auto = True
 
         # Pending unless routed to a real sheet. Executive lines are auto-classified
         # (not pending) but carry $0 commission and land on no sheet.
         is_pending = (not in_roster) and not executive_route
+        if ticket_pending:
+            is_pending = True
+
+        if "REAL_TICKET" in flags:
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason=f"Real support ticket ({rec.ticket_number.strip()}) — non-commissionable",
+            ))
+        elif "OTHER_TICKET_REFERENCE" in flags:
+            exceptions.append(ReviewItem(
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason=f"Unrecognized Ticket# format ({rec.ticket_number.strip()}) — review required",
+            ))
 
         # Rule 5 — shipping lines
         if rec.line_type == "shipping":
@@ -1169,7 +1177,7 @@ def build_salespeople_from_sqlite(
         rt = rate_type_for(routing if in_roster else "Paul")
         rate = commission_rate(disc, rt, tiers) if map_price > 0 else 0.0
         # ---- Discount-based policy (per Accounting / Jennifer, confirmed) ------
-        # Ticket lines are already excluded above (ticket overrides discount).
+        # Real ticket lines are already excluded above (ticket overrides discount).
         # For the rest, the discount off MAP decides:
         #   0-30%            -> normal (pays via the tier table).
         #   > 30% and <= 60% -> NEEDS REVIEW: held (pending) — NOT paid and NOT

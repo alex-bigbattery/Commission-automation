@@ -185,8 +185,8 @@ export default function HelpView() {
             <p>The following names are no longer active B2B reps and will <strong>never auto-assign</strong>: BB Affiliate Investment, Dmitry Gorobets, Michael Northcutt, Joseph Mohney, Jessica Key, Kara Wagner, Alexis McCarthy, River Michelle Harrington, Ryan Murphy. If they appear, the line is flagged for manual review.</p>
           </div>
           <div>
-            <span className="help-term">Ticket numbers → usually not commissionable</span>
-            <p>If an invoice has a <strong>Ticket#</strong> (the Zoho <code>cf_ticket</code> custom field) populated, the line is <strong>held for review</strong> because tickets are usually not commissionable even if paid. Accounting makes the final call — the system does not auto-exclude.</p>
+            <span className="help-term">Ticket# classification</span>
+            <p>Only a <strong>real support ticket</strong> (numeric 1–4 digits, e.g. 650 or 1234) is auto-excluded as non-commissionable. A <strong>quote reference</strong> in the Ticket# field (e.g. QUO-04421) is <em>not</em> excluded — commission calculates normally. Any other non-empty Ticket# format is flagged for review but not auto-excluded.</p>
           </div>
           <div>
             <span className="help-term">B2C non-commissionable = primary ticket filter</span>

@@ -360,9 +360,13 @@ def issue_found(row: dict[str, Any]) -> str:
     if "B2C_COUPON_RULE" in flags:
         return "B2C / coupon-based commission rule — verify coupon before including in B2B payable"
 
-    # Ticket number
-    if "TICKET_NUMBER" in flags:
-        return "Ticket number present — usually noncommissionable even if paid"
+    # Ticket number — classified in ticket_classification.py
+    if "REAL_TICKET" in flags:
+        return "Real support ticket present — non-commissionable"
+    if "QUOTE_REFERENCE_IN_TICKET_FIELD" in flags:
+        return "Quote reference in Ticket# field — not automatically excluded"
+    if "OTHER_TICKET_REFERENCE" in flags:
+        return "Unrecognized Ticket# format — review required"
 
     # Possible ticket via price anomaly (cf_ticket may be empty)
     if "PRICE_ANOMALY" in flags:
@@ -443,8 +447,12 @@ def suggested_action(row: dict[str, Any]) -> str:
         return "Review coupon on order — B2C-RC Team coupon = commissionable; B2C-Web Marketing = not commissionable"
 
     # Ticket number
-    if "TICKET_NUMBER" in flags:
-        return "Review order — ticket numbers are usually noncommissionable; exclude or approve manually"
+    if "REAL_TICKET" in flags:
+        return "Exclude — real support/warranty ticket (numeric 1–4 digits)"
+    if "QUOTE_REFERENCE_IN_TICKET_FIELD" in flags:
+        return "No action required — quote reference is not a support ticket"
+    if "OTHER_TICKET_REFERENCE" in flags:
+        return "Review Ticket# format — classify, exclude, or approve manually"
 
     # Possible ticket via price anomaly
     if "PRICE_ANOMALY" in flags:
