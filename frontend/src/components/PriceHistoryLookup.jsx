@@ -4,7 +4,14 @@ import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconRefresh, IconSearch } from "./Icons.jsx";
 
 const CATALOG_PAGE = 100;
-const MATRIX_PREVIEW_LIMIT = 100;
+const MATRIX_PREVIEW_DEFAULT = 25;
+
+const PH_TABS = [
+  { id: "search", label: "Search SKU", hint: "Inspect one SKU's MAP history." },
+  { id: "browse", label: "Browse SKUs", hint: "Find a SKU and open its timeline." },
+  { id: "matrix", label: "Timeline Matrix / Export", hint: "Create a SKU-by-date price matrix for a selected range." },
+  { id: "detail", label: "Change Detail", hint: "Audit raw price_history rows." },
+];
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -67,6 +74,19 @@ function SourceTypeCell({ row }) {
           {row.source_caution}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+function SourceLegend() {
+  return (
+    <div className="ph-source-legend">
+      <SourceBadge kind="accountant_fvprice" />
+      <SourceBadge kind="imported_rlp" />
+      <SourceBadge kind="zoho_live_sync" />
+      <span className="text-faint ph-source-legend-note">
+        Imported R_LP rows are fallback/reference only — not confirmed accountant FV_PRICE.
+      </span>
     </div>
   );
 }
@@ -145,7 +165,7 @@ function PriceStepChart({ rows }) {
   );
 }
 
-function CatalogTable({ rows, selectedSku, onSelect, loading }) {
+function BrowseTable({ rows, onViewTimeline, loading }) {
   if (loading) return <LoadingNotice>Loading SKU catalog…</LoadingNotice>;
   if (!rows.length) {
     return <p className="text-faint ph-hint">No SKUs match the current filter.</p>;
@@ -162,18 +182,12 @@ function CatalogTable({ rows, selectedSku, onSelect, loading }) {
             <th>Latest source</th>
             <th>Snapshot</th>
             <th className="cell-number">Rows</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr
-              key={r.sku}
-              className={`ph-catalog-row ${selectedSku === r.sku ? "ph-catalog-row-active" : ""}`}
-              onClick={() => onSelect(r.sku)}
-              onKeyDown={(e) => { if (e.key === "Enter") onSelect(r.sku); }}
-              tabIndex={0}
-              role="button"
-            >
+            <tr key={r.sku} className="ph-catalog-row">
               <td><code>{r.sku}</code></td>
               <td>{r.item_id || "—"}</td>
               <td className="cell-number">{money(r.current_price)}</td>
@@ -181,6 +195,11 @@ function CatalogTable({ rows, selectedSku, onSelect, loading }) {
               <td className="cell-trunc" title={r.latest_source}>{r.latest_source}</td>
               <td>{r.latest_snapshot_month}</td>
               <td className="cell-number">{r.row_count}</td>
+              <td>
+                <button type="button" className="btn btn-sm" onClick={() => onViewTimeline(r.sku)}>
+                  View timeline
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -190,7 +209,8 @@ function CatalogTable({ rows, selectedSku, onSelect, loading }) {
 }
 
 export default function PriceHistoryLookup() {
-  const [pickerMode, setPickerMode] = useState("search"); // search | browse
+  const [activeTab, setActiveTab] = useState("search");
+
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -218,11 +238,23 @@ export default function PriceHistoryLookup() {
   const [granularity, setGranularity] = useState("daily");
   const [granularityTouched, setGranularityTouched] = useState(false);
   const [includeFallback, setIncludeFallback] = useState(false);
-  const [showTimeline, setShowTimeline] = useState(false);
+  const [matrixSkuFilter, setMatrixSkuFilter] = useState("");
+  const [matrixPreviewLimit, setMatrixPreviewLimit] = useState(MATRIX_PREVIEW_DEFAULT);
+  const [showMatrixPreview, setShowMatrixPreview] = useState(false);
   const [matrixData, setMatrixData] = useState(null);
+  const [matrixLoading, setMatrixLoading] = useState(false);
+  const [matrixError, setMatrixError] = useState(null);
+
+  const [detailSkuFilter, setDetailSkuFilter] = useState("");
+  const [detailSourceFilter, setDetailSourceFilter] = useState("");
+  const [detailSourceType, setDetailSourceType] = useState("");
+  const [detailFrom, setDetailFrom] = useState("2026-04-01");
+  const [detailTo, setDetailTo] = useState(todayIso());
   const [detailList, setDetailList] = useState(null);
-  const [timelineLoading, setTimelineLoading] = useState(false);
-  const [timelineError, setTimelineError] = useState(null);
+  const [detailListLoading, setDetailListLoading] = useState(false);
+  const [detailListError, setDetailListError] = useState(null);
+
+  const activeTabMeta = PH_TABS.find((t) => t.id === activeTab) || PH_TABS[0];
 
   const loadCatalog = useCallback(async (q, page) => {
     setCatalogLoading(true);
@@ -331,17 +363,77 @@ export default function PriceHistoryLookup() {
     }
   }, [sourceFilter, monthFilter, dateFrom, dateTo]);
 
+  const buildMatrixParams = useCallback((extra = {}) => {
+    const params = new URLSearchParams({
+      from: timelineFrom,
+      to: timelineTo,
+      granularity,
+      include_fallback: String(includeFallback),
+      ...extra,
+    });
+    if (matrixSkuFilter.trim()) params.set("q", matrixSkuFilter.trim());
+    return params;
+  }, [timelineFrom, timelineTo, granularity, includeFallback, matrixSkuFilter]);
+
+  const buildDetailListParams = useCallback((extra = {}) => {
+    const params = new URLSearchParams({
+      from: detailFrom,
+      to: detailTo,
+      ...extra,
+    });
+    if (detailSkuFilter.trim()) params.set("q", detailSkuFilter.trim());
+    return params;
+  }, [detailFrom, detailTo, detailSkuFilter]);
+
+  const loadMatrix = useCallback(async () => {
+    setMatrixLoading(true);
+    setMatrixError(null);
+    try {
+      const params = buildMatrixParams({
+        limit: String(matrixPreviewLimit),
+        offset: "0",
+      });
+      const res = await apiFetch(`${API}/settings/price-history/matrix?${params.toString()}`);
+      setMatrixData(await readJson(res));
+      setShowMatrixPreview(true);
+    } catch (e) {
+      setMatrixError(e);
+      setMatrixData(null);
+      setShowMatrixPreview(false);
+    } finally {
+      setMatrixLoading(false);
+    }
+  }, [buildMatrixParams, matrixPreviewLimit]);
+
+  const loadDetailList = useCallback(async () => {
+    setDetailListLoading(true);
+    setDetailListError(null);
+    try {
+      const params = buildDetailListParams({ limit: "500", offset: "0" });
+      const res = await apiFetch(`${API}/settings/price-history/detail-list?${params.toString()}`);
+      setDetailList(await readJson(res));
+    } catch (e) {
+      setDetailListError(e);
+      setDetailList(null);
+    } finally {
+      setDetailListLoading(false);
+    }
+  }, [buildDetailListParams]);
+
+  const exportMatrix = useCallback((format) => {
+    const params = buildMatrixParams({ mode: "matrix", format });
+    const ext = format === "xlsx" ? "xlsx" : "csv";
+    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, `price_timeline_matrix.${ext}`);
+  }, [buildMatrixParams]);
+
+  const exportDetail = useCallback((format) => {
+    const params = buildDetailListParams({ mode: "detail", format });
+    const ext = format === "xlsx" ? "xlsx" : "csv";
+    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, `price_history_detail.${ext}`);
+  }, [buildDetailListParams]);
+
   useEffect(() => {
     loadDropdownOptions();
-    (async () => {
-      try {
-        const res = await apiFetch(`${API}/settings/price-history/catalog?limit=1&offset=0`);
-        const payload = await readJson(res);
-        setCatalog((prev) => ({ ...prev, total: payload?.total ?? prev.total }));
-      } catch {
-        /* ignore — badge updates when Browse tab opens */
-      }
-    })();
   }, [loadDropdownOptions]);
 
   useEffect(() => {
@@ -350,20 +442,27 @@ export default function PriceHistoryLookup() {
   }, [query, runSearch]);
 
   useEffect(() => {
-    if (pickerMode !== "browse") return undefined;
+    if (activeTab !== "browse") return undefined;
     const t = setTimeout(() => loadCatalog(catalogFilter, catalogPage), 200);
     return () => clearTimeout(t);
-  }, [pickerMode, catalogFilter, catalogPage, loadCatalog]);
+  }, [activeTab, catalogFilter, catalogPage, loadCatalog]);
 
   useEffect(() => {
-    if (!selectedSku) return undefined;
+    if (activeTab !== "search" || !selectedSku) return undefined;
     const t = setTimeout(() => loadDetail(selectedSku), 200);
     return () => clearTimeout(t);
-  }, [selectedSku, loadDetail]);
+  }, [activeTab, selectedSku, loadDetail]);
 
-  const selectSku = (sku) => {
+  useEffect(() => {
+    if (!granularityTouched && timelineFrom && timelineTo) {
+      setGranularity(defaultGranularity(timelineFrom, timelineTo));
+    }
+  }, [timelineFrom, timelineTo, granularityTouched]);
+
+  const openSkuTimeline = (sku) => {
     setSelectedSku(sku);
     setQuery(sku);
+    setActiveTab("search");
   };
 
   const clearDetailFilters = () => {
@@ -387,64 +486,25 @@ export default function PriceHistoryLookup() {
 
   const catalogPages = Math.max(1, Math.ceil((catalog.total || 0) / CATALOG_PAGE));
 
-  useEffect(() => {
-    if (!granularityTouched && timelineFrom && timelineTo) {
-      setGranularity(defaultGranularity(timelineFrom, timelineTo));
-    }
-  }, [timelineFrom, timelineTo, granularityTouched]);
-
-  const buildTimelineParams = useCallback((extra = {}) => {
-    const params = new URLSearchParams({
-      from: timelineFrom,
-      to: timelineTo,
-      granularity,
-      include_fallback: String(includeFallback),
-      ...extra,
-    });
-    if (catalogFilter.trim()) params.set("q", catalogFilter.trim());
-    return params;
-  }, [timelineFrom, timelineTo, granularity, includeFallback, catalogFilter]);
-
-  const loadTimeline = useCallback(async () => {
-    setTimelineLoading(true);
-    setTimelineError(null);
-    try {
-      const matrixParams = buildTimelineParams({
-        limit: String(MATRIX_PREVIEW_LIMIT),
-        offset: "0",
-      });
-      const detailParams = buildTimelineParams({ limit: "500", offset: "0" });
-      const [matrixRes, detailRes] = await Promise.all([
-        apiFetch(`${API}/settings/price-history/matrix?${matrixParams.toString()}`),
-        apiFetch(`${API}/settings/price-history/detail-list?${detailParams.toString()}`),
-      ]);
-      setMatrixData(await readJson(matrixRes));
-      setDetailList(await readJson(detailRes));
-      setShowTimeline(true);
-    } catch (e) {
-      setTimelineError(e);
-      setMatrixData(null);
-      setDetailList(null);
-    } finally {
-      setTimelineLoading(false);
-    }
-  }, [buildTimelineParams]);
-
-  const exportTimeline = useCallback((mode, format) => {
-    const params = buildTimelineParams({ mode, format });
-    const ext = format === "xlsx" ? "xlsx" : "csv";
-    const name = mode === "matrix" ? `price_timeline_matrix.${ext}` : `price_history_detail.${ext}`;
-    return downloadApi(`${API}/settings/price-history/export?${params.toString()}`, name);
-  }, [buildTimelineParams]);
-
-  const timelineWarnings = matrixData?.warnings ?? [];
   const matrixDates = matrixData?.dates ?? [];
   const matrixRows = matrixData?.rows ?? [];
-  const detailRows = detailList?.rows ?? [];
-  const dailyColumnWarning = granularity === "daily" && matrixDates.length > 45;
+  const matrixWarnings = matrixData?.warnings ?? [];
+  const manyDateColumns = showMatrixPreview && matrixDates.length > 45;
 
-  const rows = detail?.rows ?? [];
-  const warnings = detail?.warnings ?? [];
+  const filteredDetailRows = useMemo(() => {
+    const rows = detailList?.rows ?? [];
+    return rows.filter((row) => {
+      if (detailSourceFilter.trim()
+        && !String(row.source || "").toLowerCase().includes(detailSourceFilter.trim().toLowerCase())) {
+        return false;
+      }
+      if (detailSourceType && row.source_kind !== detailSourceType) return false;
+      return true;
+    });
+  }, [detailList, detailSourceFilter, detailSourceType]);
+
+  const skuRows = detail?.rows ?? [];
+  const skuWarnings = detail?.warnings ?? [];
   const sources = detail?.sources ?? [];
   const months = detail?.snapshot_months ?? [];
 
@@ -454,7 +514,7 @@ export default function PriceHistoryLookup() {
         Price history is read-only. Historical prices are used to calculate commissions based on sale date.
       </Banner>
 
-      <ErrorBanner error={catalogError} onRetry={() => { loadDropdownOptions(); loadCatalog(catalogFilter, catalogPage); }} />
+      <ErrorBanner error={catalogError} onRetry={loadDropdownOptions} />
 
       {dbDiag?.rows != null ? (
         <p className="text-faint ph-hint">
@@ -464,427 +524,502 @@ export default function PriceHistoryLookup() {
         </p>
       ) : null}
 
-      <div className="ph-picker-tabs">
-        <button
-          type="button"
-          className={`tab ${pickerMode === "search" ? "active" : ""}`}
-          onClick={() => setPickerMode("search")}
-        >
-          Search / dropdown
-        </button>
-        <button
-          type="button"
-          className={`tab ${pickerMode === "browse" ? "active" : ""}`}
-          onClick={() => setPickerMode("browse")}
-        >
-          Browse all SKUs
-          {catalog.total ? <span className="tab-count">{catalog.total}</span> : null}
-        </button>
+      <div className="ph-subtabs">
+        {PH_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`tab ${activeTab === tab.id ? "active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+            {tab.id === "browse" && catalog.total ? (
+              <span className="tab-count">{catalog.total}</span>
+            ) : null}
+          </button>
+        ))}
       </div>
 
-      {pickerMode === "search" ? (
-        <div className="ph-search-block">
-          <div className="ph-picker-row">
-            <div className="search-input ph-search-input">
-              <IconSearch />
-              <input
-                type="search"
-                placeholder="Search by SKU or item_id…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && query.trim()) selectSku(query.trim());
-                }}
-              />
-            </div>
-            <label className="settings-filter-label ph-dropdown-label">
-              Or select SKU
-              <select
-                value={selectedSku}
-                onChange={(e) => {
-                  if (e.target.value) selectSku(e.target.value);
-                }}
-                disabled={dropdownLoading}
-              >
-                <option value="">
-                  {dropdownLoading ? "Loading SKUs…" : `Choose a SKU (${dropdownOptions.length} loaded)`}
-                </option>
-                {dropdownFiltered.map((r) => (
-                  <option key={r.sku} value={r.sku}>
-                    {r.sku} — {money(r.current_price)} ({r.row_count} rows)
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {dropdownOptions.length >= 500 ? (
-            <p className="text-faint ph-hint">
-              Dropdown shows first 500 SKUs. Use <strong>Browse all SKUs</strong> or search for the rest.
-            </p>
-          ) : null}
-          {searchLoading ? <LoadingNotice>Searching…</LoadingNotice> : null}
+      <p className="text-faint ph-tab-hint">{activeTabMeta.hint}</p>
 
-          {searchResults.length > 0 && query.trim().length >= 2 ? (
-            <ul className="ph-search-results">
-              {searchResults.map((r) => (
-                <li key={r.sku}>
-                  <button type="button" className="ph-search-hit" onClick={() => selectSku(r.sku)}>
-                    <strong><code>{r.sku}</code></strong>
-                    <span>{money(r.current_price)}</span>
-                    <span className="text-faint">{r.row_count} row(s) · {r.latest_source}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : (
-        <section className="card ph-browse-card">
-          <div className="card-header">
-            <h3 className="card-title">All SKUs in price_history</h3>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => loadCatalog(catalogFilter, catalogPage)}
-              disabled={catalogLoading}
-            >
-              <IconRefresh /> Refresh
-            </button>
-          </div>
-          <div className="card-body">
-            <div className="table-toolbar settings-filters">
-              <div className="search-input">
+      {activeTab === "search" ? (
+        <div className="ph-tab-panel">
+          <div className="ph-search-block">
+            <div className="ph-picker-row">
+              <div className="search-input ph-search-input">
                 <IconSearch />
                 <input
                   type="search"
-                  placeholder="Filter table by SKU or item_id…"
-                  value={catalogFilter}
-                  onChange={(e) => {
-                    setCatalogFilter(e.target.value);
-                    setCatalogPage(0);
+                  placeholder="Search by SKU or item_id…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && query.trim()) openSkuTimeline(query.trim());
                   }}
                 />
               </div>
-              <span className="text-faint">
-                {catalog.total.toLocaleString()} SKU(s) total
-                {catalogFilter ? ` · filter: ${catalogFilter}` : ""}
-              </span>
-            </div>
-            <CatalogTable
-              rows={catalog.results}
-              selectedSku={selectedSku}
-              onSelect={selectSku}
-              loading={catalogLoading}
-            />
-            {catalogPages > 1 ? (
-              <div className="ph-pagination">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={catalogPage <= 0 || catalogLoading}
-                  onClick={() => setCatalogPage((p) => Math.max(0, p - 1))}
+              <label className="settings-filter-label ph-dropdown-label">
+                Or select SKU
+                <select
+                  value={selectedSku}
+                  onChange={(e) => {
+                    if (e.target.value) openSkuTimeline(e.target.value);
+                  }}
+                  disabled={dropdownLoading}
                 >
-                  Previous
-                </button>
-                <span className="text-faint">
-                  Page {catalogPage + 1} of {catalogPages}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={catalogPage >= catalogPages - 1 || catalogLoading}
-                  onClick={() => setCatalogPage((p) => p + 1)}
-                >
-                  Next
-                </button>
-              </div>
-            ) : null}
-            <p className="text-faint ph-hint">Click a row to view that SKU&apos;s full price timeline below.</p>
-
-            <section className="ph-timeline-section">
-              <h4 className="ph-timeline-title">Price timeline range</h4>
-              <div className="table-toolbar settings-filters ph-timeline-filters">
-                <label className="settings-filter-label">
-                  From
-                  <input type="date" value={timelineFrom} onChange={(e) => setTimelineFrom(e.target.value)} />
-                </label>
-                <label className="settings-filter-label">
-                  To
-                  <input type="date" value={timelineTo} onChange={(e) => setTimelineTo(e.target.value)} />
-                </label>
-                <label className="settings-filter-label">
-                  Granularity
-                  <select
-                    value={granularity}
-                    onChange={(e) => {
-                      setGranularity(e.target.value);
-                      setGranularityTouched(true);
-                    }}
-                  >
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                  </select>
-                </label>
-                <label className="settings-filter-label ph-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={includeFallback}
-                    onChange={(e) => setIncludeFallback(e.target.checked)}
-                  />
-                  Include fallback prices (R_LP template)
-                </label>
-                <button type="button" className="btn btn-sm btn-primary" onClick={loadTimeline} disabled={timelineLoading}>
-                  View Timeline
-                </button>
-              </div>
-
-              {dailyColumnWarning ? (
-                <Banner type="warning" icon={IconAlert}>
-                  Daily export over large ranges may create many columns ({matrixDates.length} dates).
-                  Use monthly granularity for long ranges.
-                </Banner>
-              ) : null}
-
-              <div className="ph-export-row">
-                <span className="text-faint">Export (all SKUs matching filter, up to 2,000):</span>
-                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("detail", "csv")}>Detail CSV</button>
-                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("matrix", "csv")}>Matrix CSV</button>
-                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("detail", "xlsx")}>Detail Excel</button>
-                <button type="button" className="btn btn-sm" onClick={() => exportTimeline("matrix", "xlsx")}>Matrix Excel</button>
-              </div>
-
-              <ErrorBanner error={timelineError} onRetry={loadTimeline} />
-
-              {timelineLoading ? <LoadingNotice>Building price timeline…</LoadingNotice> : null}
-
-              {showTimeline && !timelineLoading && matrixData ? (
-                <>
-                  <p className="text-faint ph-hint">
-                    Matrix preview: first {matrixData.count} of {matrixData.total_skus} SKU(s)
-                    · {matrixData.date_count} {matrixData.granularity} column(s)
-                    · {timelineFrom} → {timelineTo}
-                  </p>
-
-                  {timelineWarnings.map((w, i) => (
-                    <Banner key={`tw-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
+                  <option value="">
+                    {dropdownLoading ? "Loading SKUs…" : `Choose a SKU (${dropdownOptions.length} loaded)`}
+                  </option>
+                  {dropdownFiltered.map((r) => (
+                    <option key={r.sku} value={r.sku}>
+                      {r.sku} — {money(r.current_price)} ({r.row_count} rows)
+                    </option>
                   ))}
-
-                  <h4 className="ph-timeline-title">Price Timeline Matrix</h4>
-                  <div className="table-wrap ph-matrix-wrap">
-                    <table className="data-table settings-table ph-matrix-table">
-                      <thead>
-                        <tr>
-                          <th className="ph-sticky-col">SKU</th>
-                          <th>Item ID</th>
-                          <th>Item Name</th>
-                          <th className="cell-number">Current MAP</th>
-                          <th>Latest Source</th>
-                          {matrixDates.map((d) => <th key={d} className="cell-number ph-date-col">{d}</th>)}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {matrixRows.map((row) => (
-                          <tr key={row.sku}>
-                            <td className="ph-sticky-col"><code>{row.sku}</code></td>
-                            <td>{row.item_id || "—"}</td>
-                            <td className="cell-trunc" title={row.item_name || ""}>{row.item_name || "—"}</td>
-                            <td className="cell-number">{money(row.current_map)}</td>
-                            <td className="cell-trunc" title={row.latest_source || ""}>{row.latest_source || "—"}</td>
-                            {matrixDates.map((d) => (
-                              <td key={`${row.sku}-${d}`} className="cell-number">
-                                <MatrixPriceCell cell={row.prices?.[d]} />
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                        {!matrixRows.length ? (
-                          <tr><td colSpan={5 + matrixDates.length} className="text-faint">No SKUs in this range.</td></tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <h4 className="ph-timeline-title">Price Change Detail</h4>
-                  <div className="table-wrap">
-                    <table className="data-table settings-table">
-                      <thead>
-                        <tr>
-                          <th>SKU</th>
-                          <th>Item ID</th>
-                          <th className="cell-number">MAP Price</th>
-                          <th>Effective From</th>
-                          <th>Effective To</th>
-                          <th>Source</th>
-                          <th>Type</th>
-                          <th>Snapshot Month</th>
-                          <th>Active Today</th>
-                          <th>Captured At</th>
-                          <th>Warning / Caution</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detailRows.map((row, i) => (
-                          <tr key={`${row.sku}-${row.effective_from}-${i}`}>
-                            <td><code>{row.sku}</code></td>
-                            <td>{row.item_id || "—"}</td>
-                            <td className="cell-number">{money(row.map_price)}</td>
-                            <td>{row.effective_from}</td>
-                            <td>{row.effective_to_display}</td>
-                            <td className="cell-trunc" title={row.source}>{row.source}</td>
-                            <td><SourceBadge kind={row.source_kind} /></td>
-                            <td>{row.snapshot_month}</td>
-                            <td>{row.is_active_for_today ? "Yes" : "—"}</td>
-                            <td className="cell-trunc">{row.captured_at}</td>
-                            <td className="cell-trunc">{row.warning_caution || row.source_caution || "—"}</td>
-                          </tr>
-                        ))}
-                        {!detailRows.length ? (
-                          <tr><td colSpan={11} className="text-faint">No price_history rows overlap this date range.</td></tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              ) : null}
-            </section>
-          </div>
-        </section>
-      )}
-
-      {selectedSku ? (
-        <section className="card ph-detail-card" id="ph-detail">
-          <div className="card-header">
-            <h3 className="card-title">
-              <code>{selectedSku}</code>
-              {detail?.item_id ? <span className="text-faint"> · item {detail.item_id}</span> : null}
-            </h3>
-            <button type="button" className="btn btn-sm" onClick={() => loadDetail(selectedSku)} disabled={detailLoading}>
-              <IconRefresh /> Refresh
-            </button>
-          </div>
-          <div className="card-body">
-            <div className="ph-summary">
-              <div>
-                <span className="ph-summary-label">Current MAP</span>
-                <strong className="ph-summary-value">{money(detail?.current_price)}</strong>
-              </div>
-              {detail?.r_lp_fallback != null ? (
-                <div>
-                  <span className="ph-summary-label">R_LP fallback (template)</span>
-                  <strong className="ph-summary-value">{money(detail.r_lp_fallback)}</strong>
-                </div>
-              ) : null}
-              <div>
-                <span className="ph-summary-label">History rows</span>
-                <strong className="ph-summary-value">{detail?.row_count ?? 0}</strong>
-              </div>
-            </div>
-
-            {warnings.length > 0 ? (
-              <div className="ph-warnings">
-                {warnings.map((w, i) => (
-                  <Banner key={`w-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
-                ))}
-              </div>
-            ) : null}
-
-            <div className="ph-source-legend">
-              <SourceBadge kind="accountant_fvprice" />
-              <SourceBadge kind="imported_rlp" />
-              <SourceBadge kind="zoho_live_sync" />
-              <span className="text-faint ph-source-legend-note">
-                Imported R_LP rows are fallback/reference only — not confirmed accountant FV_PRICE.
-              </span>
-            </div>
-
-            <div className="table-toolbar settings-filters ph-filters">
-              <label className="settings-filter-label">
-                Source contains
-                <input
-                  type="text"
-                  list="ph-sources"
-                  value={sourceFilter}
-                  onChange={(e) => setSourceFilter(e.target.value)}
-                  placeholder="e.g. accountant_fvprice"
-                />
-                <datalist id="ph-sources">
-                  {sources.map((s) => <option key={s} value={s} />)}
-                </datalist>
-              </label>
-              <label className="settings-filter-label">
-                Snapshot month
-                <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)}>
-                  <option value="">All</option>
-                  {months.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </label>
-              <label className="settings-filter-label">
-                From
-                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-              </label>
-              <label className="settings-filter-label">
-                To
-                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-              </label>
-              {hasDetailFilters ? (
-                <button type="button" className="btn btn-sm" onClick={clearDetailFilters}>
-                  Clear filters
+            </div>
+            {dropdownOptions.length >= 500 ? (
+              <p className="text-faint ph-hint">
+                Dropdown shows first 500 SKUs. Use <strong>Browse SKUs</strong> for the full list.
+              </p>
+            ) : null}
+            {searchLoading ? <LoadingNotice>Searching…</LoadingNotice> : null}
+            {searchResults.length > 0 && query.trim().length >= 2 ? (
+              <ul className="ph-search-results">
+                {searchResults.map((r) => (
+                  <li key={r.sku}>
+                    <button type="button" className="ph-search-hit" onClick={() => openSkuTimeline(r.sku)}>
+                      <strong><code>{r.sku}</code></strong>
+                      <span>{money(r.current_price)}</span>
+                      <span className="text-faint">{r.row_count} row(s) · {r.latest_source}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+
+          {!selectedSku ? (
+            <p className="text-faint ph-hint">Search or select a SKU to view its MAP trajectory.</p>
+          ) : (
+            <section className="card ph-detail-card">
+              <div className="card-header">
+                <h3 className="card-title">
+                  <code>{selectedSku}</code>
+                  {detail?.item_id ? <span className="text-faint"> · item {detail.item_id}</span> : null}
+                </h3>
+                <button type="button" className="btn btn-sm" onClick={() => loadDetail(selectedSku)} disabled={detailLoading}>
+                  <IconRefresh /> Refresh
                 </button>
+              </div>
+              <div className="card-body">
+                <div className="ph-summary">
+                  <div>
+                    <span className="ph-summary-label">Current MAP</span>
+                    <strong className="ph-summary-value">{money(detail?.current_price)}</strong>
+                  </div>
+                  {detail?.r_lp_fallback != null ? (
+                    <div>
+                      <span className="ph-summary-label">R_LP fallback (template)</span>
+                      <strong className="ph-summary-value">{money(detail.r_lp_fallback)}</strong>
+                    </div>
+                  ) : null}
+                  <div>
+                    <span className="ph-summary-label">History rows</span>
+                    <strong className="ph-summary-value">{detail?.row_count ?? 0}</strong>
+                  </div>
+                </div>
+
+                {skuWarnings.length > 0 ? (
+                  <div className="ph-warnings">
+                    {skuWarnings.map((w, i) => (
+                      <Banner key={`w-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
+                    ))}
+                  </div>
+                ) : null}
+
+                <SourceLegend />
+
+                <div className="table-toolbar settings-filters ph-filters">
+                  <label className="settings-filter-label">
+                    Source contains
+                    <input
+                      type="text"
+                      list="ph-sources"
+                      value={sourceFilter}
+                      onChange={(e) => setSourceFilter(e.target.value)}
+                      placeholder="e.g. accountant_fvprice"
+                    />
+                    <datalist id="ph-sources">
+                      {sources.map((s) => <option key={s} value={s} />)}
+                    </datalist>
+                  </label>
+                  <label className="settings-filter-label">
+                    Snapshot month
+                    <select value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)}>
+                      <option value="">All</option>
+                      {months.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </label>
+                  <label className="settings-filter-label">
+                    From
+                    <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  </label>
+                  <label className="settings-filter-label">
+                    To
+                    <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  </label>
+                  {hasDetailFilters ? (
+                    <button type="button" className="btn btn-sm" onClick={clearDetailFilters}>
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+
+                {detailLoading ? <LoadingNotice>Loading price timeline…</LoadingNotice> : null}
+                {!detailLoading && skuRows.length > 0 ? <PriceStepChart rows={skuRows} /> : null}
+
+                <div className="table-wrap">
+                  <table className="data-table settings-table">
+                    <thead>
+                      <tr>
+                        <th className="cell-number">MAP price</th>
+                        <th>Effective from</th>
+                        <th>Effective to</th>
+                        <th>Source</th>
+                        <th>Type</th>
+                        <th>Snapshot month</th>
+                        <th>Active today</th>
+                        <th>Captured at</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {skuRows.map((row, i) => (
+                        <tr key={`${row.effective_from}-${row.source}-${i}`} className={row.is_active_for_today ? "ph-row-active" : ""}>
+                          <td className="cell-number">{money(row.map_price)}</td>
+                          <td>{row.effective_from}</td>
+                          <td>{row.effective_to_display}</td>
+                          <td className="cell-trunc" title={row.source}>{row.source}</td>
+                          <td><SourceTypeCell row={row} /></td>
+                          <td>{row.snapshot_month}</td>
+                          <td>{row.is_active_for_today ? "Yes" : "—"}</td>
+                          <td className="cell-trunc">{row.captured_at}</td>
+                        </tr>
+                      ))}
+                      {!detailLoading && skuRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={8}>
+                            <p className="text-faint" style={{ padding: "1rem 0" }}>
+                              No price history rows for this SKU{hasDetailFilters ? " with the current filters" : ""}.
+                            </p>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
+      ) : null}
+
+      {activeTab === "browse" ? (
+        <div className="ph-tab-panel">
+          <section className="card ph-browse-card">
+            <div className="card-header">
+              <h3 className="card-title">All SKUs in price_history</h3>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => loadCatalog(catalogFilter, catalogPage)}
+                disabled={catalogLoading}
+              >
+                <IconRefresh /> Refresh
+              </button>
+            </div>
+            <div className="card-body">
+              <div className="table-toolbar settings-filters">
+                <div className="search-input">
+                  <IconSearch />
+                  <input
+                    type="search"
+                    placeholder="Filter by SKU or item_id…"
+                    value={catalogFilter}
+                    onChange={(e) => {
+                      setCatalogFilter(e.target.value);
+                      setCatalogPage(0);
+                    }}
+                  />
+                </div>
+                <span className="text-faint">
+                  {catalog.total.toLocaleString()} SKU(s) total
+                </span>
+              </div>
+              <BrowseTable
+                rows={catalog.results}
+                onViewTimeline={openSkuTimeline}
+                loading={catalogLoading}
+              />
+              {catalogPages > 1 ? (
+                <div className="ph-pagination">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={catalogPage <= 0 || catalogLoading}
+                    onClick={() => setCatalogPage((p) => Math.max(0, p - 1))}
+                  >
+                    Previous
+                  </button>
+                  <span className="text-faint">
+                    Page {catalogPage + 1} of {catalogPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={catalogPage >= catalogPages - 1 || catalogLoading}
+                    onClick={() => setCatalogPage((p) => p + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
               ) : null}
             </div>
+          </section>
+        </div>
+      ) : null}
 
-            {detailLoading ? <LoadingNotice>Loading price timeline…</LoadingNotice> : null}
-
-            {!detailLoading && rows.length > 0 ? <PriceStepChart rows={rows} /> : null}
-
-            <div className="table-wrap">
-              <table className="data-table settings-table">
-                <thead>
-                  <tr>
-                    <th className="cell-number">MAP price</th>
-                    <th>Effective from</th>
-                    <th>Effective to</th>
-                    <th>Source</th>
-                    <th>Type</th>
-                    <th>Snapshot month</th>
-                    <th>Active today</th>
-                    <th>Captured at</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, i) => (
-                    <tr key={`${row.effective_from}-${row.source}-${i}`} className={row.is_active_for_today ? "ph-row-active" : ""}>
-                      <td className="cell-number">{money(row.map_price)}</td>
-                      <td>{row.effective_from}</td>
-                      <td>{row.effective_to_display}</td>
-                      <td className="cell-trunc" title={row.source}>{row.source}</td>
-                      <td><SourceTypeCell row={row} /></td>
-                      <td>{row.snapshot_month}</td>
-                      <td>{row.is_active_for_today ? "Yes" : "—"}</td>
-                      <td className="cell-trunc">{row.captured_at}</td>
-                    </tr>
-                  ))}
-                  {!detailLoading && rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8}>
-                        <p className="text-faint" style={{ padding: "1rem 0" }}>
-                          No price history rows for this SKU{hasDetailFilters ? " with the current filters" : ""}.
-                          {hasDetailFilters ? " Try clearing filters above." : " This SKU may not exist in price_history yet."}
-                        </p>
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+      {activeTab === "matrix" ? (
+        <div className="ph-tab-panel">
+          <div className="table-toolbar settings-filters ph-timeline-filters">
+            <label className="settings-filter-label">
+              From
+              <input type="date" value={timelineFrom} onChange={(e) => { setTimelineFrom(e.target.value); setShowMatrixPreview(false); }} />
+            </label>
+            <label className="settings-filter-label">
+              To
+              <input type="date" value={timelineTo} onChange={(e) => { setTimelineTo(e.target.value); setShowMatrixPreview(false); }} />
+            </label>
+            <label className="settings-filter-label">
+              Granularity
+              <select
+                value={granularity}
+                onChange={(e) => {
+                  setGranularity(e.target.value);
+                  setGranularityTouched(true);
+                  setShowMatrixPreview(false);
+                }}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </label>
+            <label className="settings-filter-label">
+              SKU filter
+              <input
+                type="search"
+                value={matrixSkuFilter}
+                onChange={(e) => { setMatrixSkuFilter(e.target.value); setShowMatrixPreview(false); }}
+                placeholder="Optional SKU filter…"
+              />
+            </label>
+            <label className="settings-filter-label">
+              Preview rows
+              <select
+                value={matrixPreviewLimit}
+                onChange={(e) => setMatrixPreviewLimit(Number(e.target.value))}
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+            <label className="settings-filter-label ph-checkbox-label">
+              <input
+                type="checkbox"
+                checked={includeFallback}
+                onChange={(e) => setIncludeFallback(e.target.checked)}
+              />
+              Include fallback prices (R_LP template)
+            </label>
+            <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrix} disabled={matrixLoading}>
+              View Matrix
+            </button>
           </div>
-        </section>
-      ) : (
-        <p className="text-faint ph-hint">
-          Search, pick from the dropdown, or browse the full SKU table — then select a SKU to view its MAP trajectory.
-        </p>
-      )}
+
+          <div className="ph-export-row">
+            <span className="text-faint">Export matrix (up to 2,000 SKUs):</span>
+            <button type="button" className="btn btn-sm" onClick={() => exportMatrix("csv")}>Matrix CSV</button>
+            <button type="button" className="btn btn-sm" onClick={() => exportMatrix("xlsx")}>Matrix Excel</button>
+          </div>
+
+          <ErrorBanner error={matrixError} onRetry={loadMatrix} />
+          {matrixLoading ? <LoadingNotice>Building matrix preview…</LoadingNotice> : null}
+
+          {manyDateColumns ? (
+            <Banner type="warning" icon={IconAlert}>
+              This view has many date columns ({matrixDates.length}).
+              Use weekly/monthly granularity or export to Excel for full review.
+            </Banner>
+          ) : null}
+
+          {showMatrixPreview && !matrixLoading && matrixData ? (
+            <>
+              <p className="text-faint ph-hint">
+                Showing first {matrixData.count} of {matrixData.total_skus} SKU(s)
+                · {matrixData.date_count} {matrixData.granularity} column(s)
+                · {timelineFrom} → {timelineTo}
+              </p>
+              {matrixWarnings.map((w, i) => (
+                <Banner key={`mw-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
+              ))}
+              <div className="ph-matrix-scroll">
+                <table className="data-table settings-table ph-matrix-table">
+                  <thead>
+                    <tr>
+                      <th className="ph-sticky-col ph-sticky-head">SKU</th>
+                      <th className="ph-sticky-col-2 ph-sticky-head">Item ID</th>
+                      <th className="ph-sticky-col-3 ph-sticky-head cell-number">Current MAP</th>
+                      <th>Latest Source</th>
+                      {matrixDates.map((d) => <th key={d} className="cell-number ph-date-col ph-sticky-head">{d}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {matrixRows.map((row) => (
+                      <tr key={row.sku}>
+                        <td className="ph-sticky-col"><code>{row.sku}</code></td>
+                        <td className="ph-sticky-col-2">{row.item_id || "—"}</td>
+                        <td className="ph-sticky-col-3 cell-number">{money(row.current_map)}</td>
+                        <td className="cell-trunc" title={row.latest_source || ""}>{row.latest_source || "—"}</td>
+                        {matrixDates.map((d) => (
+                          <td key={`${row.sku}-${d}`} className="cell-number">
+                            <MatrixPriceCell cell={row.prices?.[d]} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    {!matrixRows.length ? (
+                      <tr><td colSpan={4 + matrixDates.length} className="text-faint">No SKUs match this filter.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            !matrixLoading ? (
+              <p className="text-faint ph-hint">Set a date range and click <strong>View Matrix</strong> to preview.</p>
+            ) : null
+          )}
+        </div>
+      ) : null}
+
+      {activeTab === "detail" ? (
+        <div className="ph-tab-panel">
+          <div className="table-toolbar settings-filters ph-timeline-filters">
+            <label className="settings-filter-label">
+              SKU filter
+              <input
+                type="search"
+                value={detailSkuFilter}
+                onChange={(e) => setDetailSkuFilter(e.target.value)}
+                placeholder="Optional SKU filter…"
+              />
+            </label>
+            <label className="settings-filter-label">
+              Source contains
+              <input
+                type="text"
+                value={detailSourceFilter}
+                onChange={(e) => setDetailSourceFilter(e.target.value)}
+                placeholder="e.g. accountant_fvprice"
+              />
+            </label>
+            <label className="settings-filter-label">
+              Source type
+              <select value={detailSourceType} onChange={(e) => setDetailSourceType(e.target.value)}>
+                <option value="">All</option>
+                <option value="accountant_fvprice">Accountant FV_PRICE</option>
+                <option value="imported_rlp">Imported R_LP</option>
+                <option value="zoho_live_sync">Zoho live sync</option>
+              </select>
+            </label>
+            <label className="settings-filter-label">
+              From
+              <input type="date" value={detailFrom} onChange={(e) => setDetailFrom(e.target.value)} />
+            </label>
+            <label className="settings-filter-label">
+              To
+              <input type="date" value={detailTo} onChange={(e) => setDetailTo(e.target.value)} />
+            </label>
+            <button type="button" className="btn btn-sm btn-primary" onClick={loadDetailList} disabled={detailListLoading}>
+              Load detail
+            </button>
+          </div>
+
+          <div className="ph-export-row">
+            <span className="text-faint">Export detail (up to 5,000 rows):</span>
+            <button type="button" className="btn btn-sm" onClick={() => exportDetail("csv")}>Detail CSV</button>
+            <button type="button" className="btn btn-sm" onClick={() => exportDetail("xlsx")}>Detail Excel</button>
+          </div>
+
+          <ErrorBanner error={detailListError} onRetry={loadDetailList} />
+          {detailListLoading ? <LoadingNotice>Loading price history detail…</LoadingNotice> : null}
+
+          {detailList && !detailListLoading ? (
+            <>
+              <p className="text-faint ph-hint">
+                Showing {filteredDetailRows.length} row(s)
+                {filteredDetailRows.length !== detailList.count ? ` (filtered from ${detailList.count})` : ""}
+                · {detailFrom} → {detailTo}
+              </p>
+              <div className="table-wrap">
+                <table className="data-table settings-table">
+                  <thead>
+                    <tr>
+                      <th>SKU</th>
+                      <th>Item ID</th>
+                      <th className="cell-number">MAP Price</th>
+                      <th>Effective From</th>
+                      <th>Effective To</th>
+                      <th>Source</th>
+                      <th>Type</th>
+                      <th>Snapshot Month</th>
+                      <th>Active Today</th>
+                      <th>Captured At</th>
+                      <th>Warning / Caution</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredDetailRows.map((row, i) => (
+                      <tr key={`${row.sku}-${row.effective_from}-${i}`}>
+                        <td><code>{row.sku}</code></td>
+                        <td>{row.item_id || "—"}</td>
+                        <td className="cell-number">{money(row.map_price)}</td>
+                        <td>{row.effective_from}</td>
+                        <td>{row.effective_to_display}</td>
+                        <td className="cell-trunc" title={row.source}>{row.source}</td>
+                        <td><SourceBadge kind={row.source_kind} /></td>
+                        <td>{row.snapshot_month}</td>
+                        <td>{row.is_active_for_today ? "Yes" : "—"}</td>
+                        <td className="cell-trunc">{row.captured_at}</td>
+                        <td className="cell-trunc">{row.warning_caution || row.source_caution || "—"}</td>
+                      </tr>
+                    ))}
+                    {!filteredDetailRows.length ? (
+                      <tr><td colSpan={11} className="text-faint">No rows match the current filters.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            !detailListLoading ? (
+              <p className="text-faint ph-hint">Set filters and click <strong>Load detail</strong> to audit price_history rows.</p>
+            ) : null
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
