@@ -97,6 +97,8 @@ app = FastAPI(title="Commission Automation API", version="1.1.0")
 _default_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://bb-bice-three.vercel.app",
+    "https://bigbatterycommission.netlify.app",
 ]
 _extra = os.environ.get("ALLOWED_ORIGINS", "")
 if _extra.strip():

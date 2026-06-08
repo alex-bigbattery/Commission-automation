@@ -24,7 +24,7 @@ services:
         sync: false
       # Comma-separated Netlify/custom origins for direct browser → Render API calls
       - key: ALLOWED_ORIGINS
-        value: "https://bigbatterycommission.netlify.app"
+        value: "https://bigbatterycommission.netlify.app,https://bb-bice-three.vercel.app"
       # Optional: historical Excel root if mounted elsewhere
       - key: COMMISSIONS_ROOT
         sync: false
