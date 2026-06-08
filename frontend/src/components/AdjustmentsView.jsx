@@ -30,6 +30,7 @@ const TIP = {
   zohoSp: "Original Zoho Salesperson — exactly as Zoho recorded on the order (never replaced with 'unassigned').",
   finalAssign: "Final Commission Assignment — who/what receives commission after Accounting review. 'Pending' until classified or assigned.",
   acctCat: "Accounting Category — Company Account or Executive Account when the line was moved off a rep.",
+  ticket: "Ticket# — Zoho CF.Ticket# (cf_ticket) on the invoice. Numeric 1–4 digits = real support ticket; QUO-… = quote reference.",
 };
 
 // ---- Management review categories (Phase B, surfaced from backend Phase A) ----
@@ -76,8 +77,7 @@ const FLAG_TO_CATEGORY_TAG = [
 ];
 
 function categoryTagsFromFlags(flagsStr) {
-  if (!flagsStr) return [];
-  const flagSet = new Set(String(flagsStr).split(",").map((s) => s.trim()).filter(Boolean));
+  const flagSet = new Set(String(flagsStr || "").split(",").map((s) => s.trim()).filter(Boolean));
   const tags = [];
   const seen = new Set();
   for (const [flag, tag] of FLAG_TO_CATEGORY_TAG) {
@@ -90,9 +90,10 @@ function categoryTagsFromFlags(flagsStr) {
 }
 
 function rowCategories(r, soRevenueByOrder = null) {
+  const flags = effectiveFlags(r);
   const tags = Array.isArray(r.category_tags) && r.category_tags.length
     ? r.category_tags.slice()
-    : categoryTagsFromFlags(r.flags);
+    : categoryTagsFromFlags(flags);
   const over5000 = r.over_5000_review ?? (
     r.sales_order && soRevenueByOrder && (soRevenueByOrder[r.sales_order] || 0) > 5000
   );
@@ -118,10 +119,35 @@ function discountPct(r) {
   return 1 - rev / (map * qty);
 }
 
+function isLegacyTicketCopy(text) {
+  return /Ticket number present|usually noncommissionable|Review order — ticket numbers/i.test(String(text || ""));
+}
+
+function effectiveFlags(r) {
+  let flags = String(r.flags || "");
+  if (
+    flags.includes("TICKET_NUMBER")
+    && !flags.includes("REAL_TICKET")
+    && !flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")
+    && !flags.includes("OTHER_TICKET_REFERENCE")
+  ) {
+    const raw = String(r.ticket_number || "").trim();
+    if (/^QUO/i.test(raw)) flags += ",QUOTE_REFERENCE_IN_TICKET_FIELD";
+    else if (/^\d{1,4}$/.test(raw)) flags += ",REAL_TICKET";
+    else if (raw) flags += ",OTHER_TICKET_REFERENCE";
+    else if (r.excluded && Number(r.final_commission) === 0) flags += ",REAL_TICKET";
+  }
+  return flags;
+}
+
 // ---- Derived line state / issue / action ---------------------------------
 function lineState(r) {
+  const flags = effectiveFlags(r);
+  const isRealTicket = flags.includes("REAL_TICKET");
+  const ticketExcluded = r.excluded || (isRealTicket && Number(r.final_commission) === 0);
+
   // Excluded -- preserve category context in the label (Ticket / Return / >60% / Exec).
-  if (r.excluded) {
+  if (ticketExcluded) {
     const def = primaryCategoryDef(r);
     const label = def && def.color === "red" ? `Excluded — ${def.short}`
       : def && def.id === "executive_account" ? "Executive Account"
@@ -139,7 +165,6 @@ function lineState(r) {
     const label = def && def.color === "yellow" ? `Needs Review — ${def.short}` : "Needs Review";
     return { key: "needs", label, color: "yellow" };
   }
-  const flags = String(r.flags || "");
   // UNPAID is informational ONLY -- engine still pays. Show a gray pill, NOT yellow.
   // Removing it from the yellow override list per Phase B spec #5.
   if (flags.includes("MISSING_MAP") || flags.includes("PRICE_ANOMALY") || flags.includes("NEGATIVE_BALANCE")) {
@@ -149,8 +174,10 @@ function lineState(r) {
 }
 
 function issueFound(r) {
-  if (r.issue_found) return r.issue_found;
-  const flags = String(r.flags || "");
+  const flags = effectiveFlags(r);
+  if (r.issue_found && !(isLegacyTicketCopy(r.issue_found) && (flags.includes("REAL_TICKET") || flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")))) {
+    return r.issue_found;
+  }
   const team = String(r.sales_team || "").toLowerCase();
   if (flags.includes("REAL_TICKET")) return "Real support ticket present — non-commissionable";
   if (flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")) return "Quote reference in Ticket# field — not automatically excluded";
@@ -180,9 +207,10 @@ function issueFound(r) {
 }
 
 function suggestedAction(r) {
-  if (r.suggested_action) return r.suggested_action;
-  const team = String(r.sales_team || "").toLowerCase();
-  const flags = String(r.flags || "");
+  const flags = effectiveFlags(r);
+  if (r.suggested_action && !(isLegacyTicketCopy(r.suggested_action) && (flags.includes("REAL_TICKET") || flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")))) {
+    return r.suggested_action;
+  }
   if (flags.includes("REAL_TICKET")) return "Exclude — real support/warranty ticket (numeric 1–4 digits)";
   if (flags.includes("QUOTE_REFERENCE_IN_TICKET_FIELD")) return "No action required — quote reference is not a support ticket";
   if (flags.includes("OTHER_TICKET_REFERENCE")) return "Review Ticket# format — classify, exclude, or approve manually";
@@ -195,6 +223,7 @@ function suggestedAction(r) {
   if (flags.includes("COMPANY_ACCOUNT")) return "Review only if exception";
   if (flags.includes("PRICE_HISTORY_NO_WINDOW")) return "Verify fallback MAP; consider loading a covering snapshot";
   if (flags.includes("MAP_ANOMALY_LOW")) return "Verify snapshot price for this SKU";
+  const team = String(r.sales_team || "").toLowerCase();
   if (r.pending && (team.includes("exe") || team.includes("comp"))) return "Classify as Company / Executive";
   if (r.pending && (r.original_zoho_salesperson === "(missing in Zoho)")) return "Assign salesperson";
   if (r.pending && flags.includes("UNASSIGNED"))
@@ -208,6 +237,8 @@ function suggestedAction(r) {
 }
 
 function finalAssignment(r) {
+  const flags = effectiveFlags(r);
+  if (flags.includes("REAL_TICKET") && Number(r.final_commission) === 0) return "Excluded";
   return r.final_commission_assignment || r.salesperson || "—";
 }
 
@@ -768,6 +799,7 @@ export default function AdjustmentsView() {
                   <th><Tip text={TIP.finalAssign}>Final Assignment</Tip></th>
                   <th>Customer</th>
                   <th>SO / Invoice</th>
+                  <th><Tip text={TIP.ticket}>Ticket#</Tip></th>
                   <th>Item</th>
                   <th className="cell-number"><Tip text={TIP.calc}>Calculated</Tip></th>
                   <th className="cell-number"><Tip text={TIP.change}>Change</Tip></th>
@@ -818,6 +850,9 @@ export default function AdjustmentsView() {
                           </div>
                         )}
                       </td>
+                      <td className="cell-trunc" title={r.ticket_number || ""}>
+                        {r.ticket_number ? r.ticket_number : <span className="text-faint">—</span>}
+                      </td>
                       <td className="cell-trunc" title={r.item_name}>
                         <div>{r.sku}</div>
                         {retStatus && (
@@ -852,7 +887,7 @@ export default function AdjustmentsView() {
                   );
                 })}
                 {filtered.length === 0 && !loading && (
-                  <tr><td colSpan={14}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
+                  <tr><td colSpan={15}><div className="empty-state"><div className="empty-state-icon"><IconCheck /></div>
                     <p className="empty-state-title">Nothing to review here</p>
                     <p className="empty-state-desc">Try the "All lines" chip or change the filters.</p></div></td></tr>
                 )}
@@ -883,6 +918,7 @@ export default function AdjustmentsView() {
                   <div><span>Customer</span><strong>{editing.customer || "—"}</strong></div>
                   <div><span>Sales Order</span><strong>{editing.sales_order || "—"}</strong></div>
                   <div><span>Invoice</span><strong>{editing.invoice || "—"}</strong></div>
+                  <div><span><Tip text={TIP.ticket}>Ticket#</Tip></span><strong>{editing.ticket_number || "—"}</strong></div>
                   <div><span>Item</span><strong title={editing.item_name}>{editing.sku || "—"}</strong></div>
                   <div><span>Sales Team</span><strong>{editing.sales_team || "—"}</strong></div>
                   <div><span><Tip text={TIP.zohoSp}>Original Zoho Salesperson</Tip></span><strong>{zohoSalesperson(editing)}</strong></div>

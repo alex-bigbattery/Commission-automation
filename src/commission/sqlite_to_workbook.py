@@ -1341,6 +1341,7 @@ def build_salespeople_from_sqlite(
             **audit_extra,
             "sales_order": ln.rec.salesorder_number,
             "invoice": ln.rec.invoice_number,
+            "ticket_number": (ln.rec.ticket_number or "").strip(),
             "sku": ln.rec.sku,
             "item_name": ln.rec.item_name,
             "customer": ln.rec.customer_name,
