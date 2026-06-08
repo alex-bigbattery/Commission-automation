@@ -6,7 +6,8 @@ import CommissionsView from "./components/CommissionsView.jsx";
 import ZohoView from "./components/ZohoView.jsx";
 import ReportsView from "./components/ReportsView.jsx";
 import HelpView from "./components/HelpView.jsx";
-import { IconAudit, IconCloud, IconHistory, IconReports, IconSparkle, IconList, IconInfo } from "./components/Icons.jsx";
+import SettingsView from "./components/SettingsView.jsx";
+import { IconAudit, IconCloud, IconHistory, IconReports, IconSparkle, IconList, IconInfo, IconSettings } from "./components/Icons.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 import { authEnabled } from "./lib/supabase.js";
 
@@ -17,6 +18,7 @@ const TABS = [
   { id: "commissions", label: "History", subtitle: "Previous commission workbooks", icon: IconHistory },
   { id: "zoho", label: "Zoho Books", subtitle: "Exported operational data", icon: IconCloud },
   { id: "reports", label: "Reports", subtitle: "Generated audits", icon: IconReports },
+  { id: "settings", label: "Commission Settings", subtitle: "Rules, rates, MAP history, and roster (read-only)", icon: IconSettings },
   { id: "help", label: "Help", subtitle: "User guide & how the flow works", icon: IconInfo },
 ];
 
@@ -112,6 +114,7 @@ export default function App() {
           {activeTab === "commissions" && <CommissionsView />}
           {activeTab === "zoho" && <ZohoView />}
           {activeTab === "reports" && <ReportsView />}
+          {activeTab === "settings" && <SettingsView />}
           {activeTab === "help" && <HelpView />}
         </div>
       </main>

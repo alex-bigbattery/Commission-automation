@@ -35,6 +35,14 @@ from src.commission.sqlite_data_source import (
     period_counts,
 )
 from src.commission.roster import roster_rep_sheet_keys
+from src.commission.settings_read import (
+    get_commission_settings,
+    get_price_history_for_sku,
+    get_roster_settings,
+    list_price_history_catalog,
+    query_price_history,
+    search_price_history,
+)
 from src.commission.sqlite_to_workbook import (
     ALL_SHEETS_ORDERED,
     build_salespeople_from_sqlite,
@@ -1177,3 +1185,62 @@ def config() -> dict:
         "commissions_dir": str(COMMISSIONS_DIR),
         "commissions_dir_exists": COMMISSIONS_DIR.exists(),
     }
+
+
+@app.get("/api/settings/commission")
+def settings_commission() -> dict:
+    """Read-only commission rules, rate table, thresholds, Bruce rates, ticket policy."""
+    return get_commission_settings(MASTER_TEMPLATE)
+
+
+@app.get("/api/settings/roster")
+def settings_roster() -> dict:
+    """Read-only roster / people configuration."""
+    return get_roster_settings()
+
+
+@app.get("/api/settings/price-history/search")
+def settings_price_history_search(
+    q: str = Query(""),
+    limit: int = Query(25, ge=1, le=100),
+) -> dict:
+    """Autocomplete search for SKUs / item_ids in price_history."""
+    return search_price_history(q, limit=limit)
+
+
+@app.get("/api/settings/price-history/catalog")
+def settings_price_history_catalog(
+    q: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Paginated catalog of all SKUs in price_history (dropdown + browse table)."""
+    return list_price_history_catalog(q=q, limit=limit, offset=offset)
+
+
+@app.get("/api/settings/price-history")
+def settings_price_history(
+    sku: str | None = None,
+    snapshot_month: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = Query(500, ge=1, le=2000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Read-only price_history: full SKU trajectory or browse mode."""
+    if sku and sku.strip():
+        return get_price_history_for_sku(
+            sku.strip(),
+            template_path=MASTER_TEMPLATE,
+            source=source,
+            snapshot_month=snapshot_month,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    return query_price_history(
+        sku=sku,
+        snapshot_month=snapshot_month,
+        limit=limit,
+        offset=offset,
+    )
