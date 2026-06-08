@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson } from "../lib/api.js";
-import { Banner, LoadingNotice, Pill } from "./ui.jsx";
+import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconRefresh, IconSearch } from "./Icons.jsx";
 
 const CATALOG_PAGE = 100;
@@ -154,6 +154,7 @@ export default function PriceHistoryLookup() {
 
   const [dropdownOptions, setDropdownOptions] = useState([]);
   const [dropdownLoading, setDropdownLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState(null);
 
   const [selectedSku, setSelectedSku] = useState("");
   const [detail, setDetail] = useState(null);
@@ -165,6 +166,7 @@ export default function PriceHistoryLookup() {
 
   const loadCatalog = useCallback(async (q, page) => {
     setCatalogLoading(true);
+    setCatalogError(null);
     try {
       const offset = page * CATALOG_PAGE;
       const params = new URLSearchParams({
@@ -180,8 +182,9 @@ export default function PriceHistoryLookup() {
         offset: payload?.offset ?? offset,
         limit: payload?.limit ?? CATALOG_PAGE,
       });
-    } catch {
+    } catch (e) {
       setCatalog({ results: [], total: 0, offset: 0, limit: CATALOG_PAGE });
+      setCatalogError(e);
     } finally {
       setCatalogLoading(false);
     }
@@ -189,12 +192,17 @@ export default function PriceHistoryLookup() {
 
   const loadDropdownOptions = useCallback(async () => {
     setDropdownLoading(true);
+    setCatalogError(null);
     try {
       const res = await apiFetch("/settings/price-history/catalog?limit=500&offset=0");
       const payload = await readJson(res);
       setDropdownOptions(Array.isArray(payload?.results) ? payload.results : []);
-    } catch {
+      if ((payload?.total ?? 0) === 0) {
+        setCatalogError({ title: "No price history data", message: "The price_history table is empty on the server." });
+      }
+    } catch (e) {
       setDropdownOptions([]);
+      setCatalogError(e);
     } finally {
       setDropdownLoading(false);
     }
@@ -282,6 +290,15 @@ export default function PriceHistoryLookup() {
     setQuery(sku);
   };
 
+  const clearDetailFilters = () => {
+    setSourceFilter("");
+    setMonthFilter("");
+    setDateFrom("");
+    setDateTo("");
+  };
+
+  const hasDetailFilters = Boolean(sourceFilter.trim() || monthFilter || dateFrom || dateTo);
+
   const dropdownFiltered = useMemo(() => {
     const needle = query.trim().toUpperCase();
     if (!needle) return dropdownOptions;
@@ -304,6 +321,8 @@ export default function PriceHistoryLookup() {
       <Banner type="info" icon={IconAlert}>
         Price history is read-only. Historical prices are used to calculate commissions based on sale date.
       </Banner>
+
+      <ErrorBanner error={catalogError} onRetry={() => { loadDropdownOptions(); loadCatalog(catalogFilter, catalogPage); }} />
 
       <div className="ph-picker-tabs">
         <button
@@ -511,6 +530,11 @@ export default function PriceHistoryLookup() {
                 To
                 <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </label>
+              {hasDetailFilters ? (
+                <button type="button" className="btn btn-sm" onClick={clearDetailFilters}>
+                  Clear filters
+                </button>
+              ) : null}
             </div>
 
             {detailLoading ? <LoadingNotice>Loading price timeline…</LoadingNotice> : null}
@@ -548,7 +572,8 @@ export default function PriceHistoryLookup() {
                     <tr>
                       <td colSpan={8}>
                         <p className="text-faint" style={{ padding: "1rem 0" }}>
-                          No price history rows for this SKU with the current filters.
+                          No price history rows for this SKU{hasDetailFilters ? " with the current filters" : ""}.
+                          {hasDetailFilters ? " Try clearing filters above." : " This SKU may not exist in price_history yet."}
                         </p>
                       </td>
                     </tr>

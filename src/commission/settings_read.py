@@ -26,7 +26,7 @@ from src.commission.sqlite_to_workbook import (
     load_tiers_from_template,
 )
 from src.commission.ticket_classification import classify_ticket_number
-from src.db.connection import DbConnection, get_connection, init_database
+from src.db.connection import DbConnection, get_connection
 
 
 # Same value as backend/app.py OVER_5000_THRESHOLD — virtual review annotation only.
@@ -456,7 +456,6 @@ def list_price_history_catalog(
     offset: int = 0,
 ) -> dict[str, Any]:
     """Paginated catalog of all SKUs in price_history (for dropdown + browse table)."""
-    init_database()
     conn = get_connection()
     today = _today_iso()
     needle = (q or "").strip().upper()
@@ -526,7 +525,6 @@ def get_price_history_for_sku(
     date_to: str | None = None,
 ) -> dict[str, Any]:
     """Full read-only trajectory for one SKU with enrichment and warnings."""
-    init_database()
     conn = get_connection()
     today = _today_iso()
     sku_u = sku.strip().upper()
@@ -615,7 +613,6 @@ def query_price_history(
     offset: int = 0,
 ) -> dict[str, Any]:
     """Read-only price_history browse with optional filters."""
-    init_database()
     conn = get_connection()
 
     clauses: list[str] = ["sku IS NOT NULL", "sku != ''"]

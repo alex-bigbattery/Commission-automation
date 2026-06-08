@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -20,6 +21,30 @@ except ImportError:
     pass
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+_schema_lock = threading.Lock()
+_postgres_schema_ready = False
+_sqlite_schema_ready: set[str] = set()
+
+
+def _ensure_postgres_schema(url: str) -> None:
+    """Run Postgres schema bootstrap once per process (not on every API request)."""
+    global _postgres_schema_ready
+    with _schema_lock:
+        if _postgres_schema_ready:
+            return
+        init_database(database_url=url)
+        _postgres_schema_ready = True
+
+
+def _ensure_sqlite_schema(path: Path) -> None:
+    key = str(path.resolve())
+    with _schema_lock:
+        if key in _sqlite_schema_ready:
+            return
+        if not path.parent.exists() or not path.exists():
+            init_database(path)
+        _sqlite_schema_ready.add(key)
 
 
 def using_postgres() -> bool:
@@ -680,10 +705,9 @@ def get_connection(
 ) -> DbConnection:
     url = (database_url or DATABASE_URL).strip()
     if url:
-        init_database(database_url=url)
+        _ensure_postgres_schema(url)
         return _connect_postgres(url)
 
     path = db_path or DB_PATH
-    if not path.parent.exists() or not path.exists():
-        init_database(path)
+    _ensure_sqlite_schema(path)
     return _connect_sqlite(path)
