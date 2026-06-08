@@ -1208,12 +1208,14 @@ def config() -> dict:
 
 
 @app.get("/api/settings/commission")
+@app.get("/settings/commission")
 def settings_commission() -> dict:
     """Read-only commission rules, rate table, thresholds, Bruce rates, ticket policy."""
     return get_commission_settings(MASTER_TEMPLATE)
 
 
 @app.get("/api/settings/roster")
+@app.get("/settings/roster")
 def settings_roster() -> dict:
     """Read-only roster / people configuration."""
     return get_roster_settings()

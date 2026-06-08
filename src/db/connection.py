@@ -636,6 +636,37 @@ def _split_sql_statements(sql: str) -> list[str]:
     return parts
 
 
+_PG_NOT_NULL_COLUMNS = (
+    ("price_history", "map_price"),
+    ("price_history", "effective_from"),
+    ("price_history", "effective_to"),
+    ("price_history", "source"),
+    ("price_history", "snapshot_month"),
+)
+
+
+def _pg_column_is_not_null(conn: DbConnection, table: str, column: str) -> bool:
+    row = conn.execute(
+        "SELECT is_nullable FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = ? AND column_name = ?",
+        (table, column),
+    ).fetchone()
+    return bool(row and str(row["is_nullable"]).upper() == "NO")
+
+
+def _apply_postgres_not_null_migrations(conn: DbConnection) -> None:
+    for table, column in _PG_NOT_NULL_COLUMNS:
+        if _pg_column_is_not_null(conn, table, column):
+            continue
+        statement = f"ALTER TABLE {table} ALTER COLUMN {column} SET NOT NULL"
+        try:
+            conn.execute(statement)
+            conn.commit()
+        except Exception:
+            conn._conn.rollback()
+            raise
+
+
 def _apply_schema_migrations(conn: DbConnection) -> None:
     for statement in SCHEMA_MIGRATIONS:
         try:
@@ -647,18 +678,10 @@ def _apply_schema_migrations(conn: DbConnection) -> None:
                 conn._conn.rollback()
             if not duplicate_column_error(exc, conn.postgres):
                 raise
-    # Postgres-only NOT NULL hardening on existing price_history rows. Idempotent:
-    # ALTER COLUMN SET NOT NULL on a column that is already NOT NULL is a no-op in
-    # modern Postgres. If any existing row has NULL in those columns, this raises —
-    # that is the desired loud failure: fix the data before continuing.
+    # Postgres-only NOT NULL hardening. Skip when columns are already NOT NULL —
+    # re-running ALTER on a busy table waits for locks and can hit statement_timeout.
     if conn.postgres:
-        for statement in SCHEMA_MIGRATIONS_PG:
-            try:
-                conn.execute(statement)
-                conn.commit()
-            except Exception:
-                conn._conn.rollback()
-                raise
+        _apply_postgres_not_null_migrations(conn)
 
 
 def _connect_postgres(url: str) -> DbConnection:

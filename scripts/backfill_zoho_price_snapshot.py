@@ -224,7 +224,6 @@ def main() -> int:
 
     replace_sources = [s.strip() for s in (args.replace_sources or "").split(",") if s.strip()]
 
-    init_database()
     conn = get_connection()
     try:
         plan = plan_backfill(

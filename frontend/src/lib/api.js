@@ -14,10 +14,24 @@ const API = API_BASE ? `${API_BASE}/api` : "/api";
 
 function resolveApiUrl(path) {
   if (/^https?:\/\//i.test(path)) {
+    // Legacy builds called `${API_BASE}/settings/...` without the /api segment.
+    if (API_BASE) {
+      const base = API_BASE.replace(/\/$/, "");
+      const m = path.match(/^https?:\/\/[^/]+(\/.*)$/i);
+      const pathname = m ? m[1] : "";
+      if (pathname && !pathname.startsWith("/api/") && pathname !== "/api") {
+        return `${base}/api${pathname}`;
+      }
+    }
     return path;
   }
   if (path.startsWith("/")) {
-    return API_BASE ? `${API_BASE}${path}` : path;
+    if (API_BASE) {
+      const normalized =
+        path.startsWith("/api/") || path === "/api" ? path : `/api${path}`;
+      return `${API_BASE}${normalized}`;
+    }
+    return path;
   }
   return `${API}/${path}`;
 }

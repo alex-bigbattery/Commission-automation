@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { API, apiFetch, readJson } from "../lib/api.js";
+import { apiFetch, readJson } from "../lib/api.js";
 import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconInfo, IconSettings } from "./Icons.jsx";
 import PriceHistoryLookup from "./PriceHistoryLookup.jsx";
@@ -269,7 +269,7 @@ export default function SettingsView() {
     setLoadingCommission(true);
     setError(null);
     try {
-      const res = await apiFetch(`${API}/settings/commission`);
+      const res = await apiFetch("settings/commission");
       setCommission(await readJson(res));
     } catch (e) {
       setError(e);
@@ -281,7 +281,7 @@ export default function SettingsView() {
   const loadRoster = useCallback(async () => {
     setLoadingRoster(true);
     try {
-      const res = await apiFetch(`${API}/settings/roster`);
+      const res = await apiFetch("settings/roster");
       setRoster(await readJson(res));
     } catch (e) {
       setError((prev) => prev || e);
