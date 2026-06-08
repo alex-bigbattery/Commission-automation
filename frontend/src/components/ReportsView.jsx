@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-import { API, apiFetch, readJson } from "../lib/api.js";
+import { apiFetch, readJson } from "../lib/api.js";
 
 export default function ReportsView() {
   const [reports, setReports] = useState([]);
@@ -13,7 +13,7 @@ export default function ReportsView() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    apiFetch(`${API}/reports`)
+    apiFetch(`reports`)
       .then(readJson)
       .then((d) => {
         setReports(d.workbooks || []);
@@ -26,7 +26,7 @@ export default function ReportsView() {
     if (!selected) return;
     setLoading(true);
     setError("");
-    apiFetch(`${API}/workbooks/${encodeURIComponent(selected)}/sheets?source=report`)
+    apiFetch(`workbooks/${encodeURIComponent(selected)}/sheets?source=report`)
       .then(readJson)
       .then((d) => {
         setSheets(d.sheets || []);
@@ -41,7 +41,7 @@ export default function ReportsView() {
     setLoading(true);
     setError("");
     apiFetch(
-      `${API}/workbooks/${encodeURIComponent(selected)}/sheets/${encodeURIComponent(activeSheet)}?source=report`
+      `workbooks/${encodeURIComponent(selected)}/sheets/${encodeURIComponent(activeSheet)}?source=report`
     )
       .then(readJson)
       .then((d) => {

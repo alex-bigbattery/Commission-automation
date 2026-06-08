@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import ExcelGrid from "./ExcelGrid.jsx";
 import SpreadsheetView from "./SpreadsheetView.jsx";
 import { LoadingNotice } from "./ui.jsx";
-import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
+import { apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const GROUP_LABELS = {
   summary: "Summary",
@@ -134,7 +134,7 @@ export default function CommissionsView() {
 
   async function loadTree() {
     try {
-      const data = await readJson(await apiFetch(`${API}/commissions/tree`));
+      const data = await readJson(await apiFetch(`commissions/tree`));
       setTree(data);
       const firstYear = data.years?.[0];
       if (firstYear) {
@@ -151,7 +151,7 @@ export default function CommissionsView() {
 
   async function loadSqliteStatus() {
     try {
-      const data = await readJson(await apiFetch(`${API}/db/status`));
+      const data = await readJson(await apiFetch(`db/status`));
       setSqliteStatus(data);
     } catch {
       setSqliteStatus(null);
@@ -164,7 +164,7 @@ export default function CommissionsView() {
     try {
       const data = await readJson(
         await apiFetch(
-          `${API}/commissions/sqlite/summary?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(sqliteMonth)}`
+          `commissions/sqlite/summary?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(sqliteMonth)}`
         )
       );
       setSqliteSummary(data);
@@ -182,7 +182,7 @@ export default function CommissionsView() {
     try {
       const data = await readJson(
         await apiFetch(
-          `${API}/commissions/sqlite/table?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(
+          `commissions/sqlite/table?year=${encodeURIComponent(sqliteYear)}&month=${encodeURIComponent(
             sqliteMonth
           )}&table=${encodeURIComponent(sqliteTable)}&limit=1500`
         )
@@ -222,7 +222,7 @@ export default function CommissionsView() {
     setError("");
     try {
       const data = await readJson(
-        await apiFetch(`${API}/commissions/workbooks/${encodeURIComponent(id)}/meta`)
+        await apiFetch(`commissions/workbooks/${encodeURIComponent(id)}/meta`)
       );
       setSheetGroups(data.groups || {});
       setSheets(data.sheets || []);
@@ -249,7 +249,7 @@ export default function CommissionsView() {
     try {
       const data = await readJson(
         await apiFetch(
-          `${API}/commissions/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent(sheet)}`
+          `commissions/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent(sheet)}`
         )
       );
       setGrid(data);
@@ -305,7 +305,7 @@ export default function CommissionsView() {
     if (!workbook?.id) return;
     try {
       const name = cleanWorkbookName(workbook.label) || "workbook.xlsx";
-      await downloadApi(`${API}/commissions/workbooks/${encodeURIComponent(workbook.id)}/download`, name);
+      await downloadApi(`commissions/workbooks/${encodeURIComponent(workbook.id)}/download`, name);
     } catch (err) {
       setError(err.message);
     }

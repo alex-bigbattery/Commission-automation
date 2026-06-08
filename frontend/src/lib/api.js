@@ -42,6 +42,8 @@ export const SUPPORT_CONTACT = (import.meta.env?.VITE_SUPPORT_CONTACT || "").tri
 
 export { API };
 
+// Use apiFetch("path/under/api") — do not prefix with `${API}/` in components.
+
 /**
  * Friendly, user-facing error carrying a title, a suggested fix, and the raw
  * technical detail (for the developer).

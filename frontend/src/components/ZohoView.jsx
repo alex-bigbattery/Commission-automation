@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-import { API, apiFetch, readJson } from "../lib/api.js";
+import { apiFetch, readJson } from "../lib/api.js";
 
 export default function ZohoView() {
   const [workbooks, setWorkbooks] = useState([]);
@@ -29,7 +29,7 @@ export default function ZohoView() {
   }, [selectedWorkbook, activeSheet]);
 
   async function loadWorkbooks() {
-    const data = await readJson(await apiFetch(`${API}/zoho/workbooks`));
+    const data = await readJson(await apiFetch(`zoho/workbooks`));
     setWorkbooks(data.workbooks || []);
     if (data.workbooks?.[0]) setSelectedWorkbook(data.workbooks[0].id);
   }
@@ -39,7 +39,7 @@ export default function ZohoView() {
     try {
       const data = await readJson(
         await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(workbookId)}/sheets?source=zoho`
+        `workbooks/${encodeURIComponent(workbookId)}/sheets?source=zoho`
         )
       );
       setSheets(data.sheets || []);
@@ -56,7 +56,7 @@ export default function ZohoView() {
     try {
       const data = await readJson(
         await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(workbookId)}/sheets/${encodeURIComponent(sheetName)}?source=zoho`
+        `workbooks/${encodeURIComponent(workbookId)}/sheets/${encodeURIComponent(sheetName)}?source=zoho`
         )
       );
       setColumns(data.columns || []);
@@ -73,7 +73,7 @@ export default function ZohoView() {
     setError("");
     setStatus("");
     try {
-      const data = await readJson(await apiFetch(`${API}/fetch`, {
+      const data = await readJson(await apiFetch(`fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ date: fetchDate }),

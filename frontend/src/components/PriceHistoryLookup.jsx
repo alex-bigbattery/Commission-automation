@@ -307,7 +307,7 @@ export default function PriceHistoryLookup() {
     setDropdownLoading(true);
     setCatalogError(null);
     try {
-      const res = await apiFetch(`${API}/settings/price-history/catalog?limit=500&offset=0`);
+      const res = await apiFetch("settings/price-history/catalog?limit=500&offset=0");
       const payload = await readJson(res);
       setDropdownOptions(Array.isArray(payload?.results) ? payload.results : []);
       setDbDiag({

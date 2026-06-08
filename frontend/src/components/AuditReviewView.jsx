@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import SpreadsheetView from "./SpreadsheetView.jsx";
-import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
+import { apiFetch, downloadApi, readJson } from "../lib/api.js";
 import { LoadingNotice } from "./ui.jsx";
 
 const MONTHS = [
@@ -115,7 +115,7 @@ export default function AuditReviewView() {
 
   async function loadDbStatus() {
     try {
-      const data = await readJson(await apiFetch(`${API}/db/status`));
+      const data = await readJson(await apiFetch(`db/status`));
       setDbStatus(data);
     } catch {
       setDbStatus(null);
@@ -127,7 +127,7 @@ export default function AuditReviewView() {
     setError("");
     try {
       const statusData = await readJson(
-        await apiFetch(`${API}/input/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`)
+        await apiFetch(`input/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`)
       );
       setInputStatus(statusData);
 
@@ -155,7 +155,7 @@ export default function AuditReviewView() {
       if (overrideReportId) query.set("report_id", overrideReportId);
 
       try {
-        const summary = await readJson(await apiFetch(`${API}/audit/summary?${query.toString()}`));
+        const summary = await readJson(await apiFetch(`audit/summary?${query.toString()}`));
         setStatusCards((prev) => ({ ...prev, ...(summary.cards || {}) }));
         setReportId(summary.report_id || "");
         setHasHistoricalValidation(Boolean(summary?.has_historical_workbook || statusData?.files?.b2b?.exists));
@@ -186,7 +186,7 @@ export default function AuditReviewView() {
     setStatus("Running initial historical sync…");
     try {
       const data = await readJson(
-        await apiFetch(`${API}/sync/full`, {
+        await apiFetch(`sync/full`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ date_start: "2021-01-01", date_end: "today" }),
@@ -209,7 +209,7 @@ export default function AuditReviewView() {
     setStatus("Syncing latest Zoho data into SQLite…");
     try {
       const data = await readJson(
-        await apiFetch(`${API}/sync/incremental`, {
+        await apiFetch(`sync/incremental`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         })
@@ -235,7 +235,7 @@ export default function AuditReviewView() {
     setStatus("");
     try {
       await readJson(
-        await apiFetch(`${API}/uploads`, {
+        await apiFetch(`uploads`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -266,7 +266,7 @@ export default function AuditReviewView() {
     setStatus("Generating commission audit from SQLite…");
     try {
       const data = await readJson(
-        await apiFetch(`${API}/audit/run`, {
+        await apiFetch(`audit/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ year, month }),
@@ -290,16 +290,16 @@ export default function AuditReviewView() {
     if (!id) return;
     const validationData = await readJson(
       await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Validation vs Jennifer")}?source=report`
+        `workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Validation vs Jennifer")}?source=report`
       )
     );
     const lineMatchData = await readJson(
       await apiFetch(
-        `${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Line Match vs Jennifer")}?source=report`
+        `workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Line Match vs Jennifer")}?source=report`
       )
     );
     const exceptionsData = await readJson(
-      await apiFetch(`${API}/workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Exceptions")}?source=report`)
+      await apiFetch(`workbooks/${encodeURIComponent(id)}/sheets/${encodeURIComponent("Legacy Exceptions")}?source=report`)
     );
     setValidation({ columns: validationData.columns || [], rows: validationData.rows || [] });
     setLineMatch({ columns: lineMatchData.columns || [], rows: lineMatchData.rows || [] });
@@ -327,7 +327,7 @@ export default function AuditReviewView() {
   async function handleDownloadReport() {
     if (!reportId) return;
     try {
-      await downloadApi(`${API}/downloads/reports/${encodeURIComponent(reportId)}`, reportId);
+      await downloadApi(`downloads/reports/${encodeURIComponent(reportId)}`, reportId);
     } catch (err) {
       setError(err.message);
     }

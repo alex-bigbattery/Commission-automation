@@ -14,7 +14,7 @@ import {
   IconHistory,
 } from "./Icons.jsx";
 
-import { API, apiFetch, downloadApi, readJson } from "../lib/api.js";
+import { apiFetch, downloadApi, readJson } from "../lib/api.js";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -58,12 +58,12 @@ export default function GenerateView() {
     setError("");
     try {
       const input = await readJson(
-        await apiFetch(`${API}/input/status?year=${year}&month=${month}`)
+        await apiFetch(`input/status?year=${year}&month=${month}`)
       );
       setPeriodReady(Boolean(input?.sqlite_period?.ready));
       setPeriodCounts(input?.sqlite_period?.counts || {});
 
-      const sum = await readJson(await apiFetch(`${API}/commission/summary?year=${year}&month=${month}`));
+      const sum = await readJson(await apiFetch(`commission/summary?year=${year}&month=${month}`));
       if (sum.generated) {
         setSummary(sum);
         await loadExceptions(sum.report_id);
@@ -84,7 +84,7 @@ export default function GenerateView() {
 
   async function loadExceptions(_reportId) {
     const data = await readJson(
-      await apiFetch(`${API}/commission/exceptions?year=${year}&month=${month}`)
+      await apiFetch(`commission/exceptions?year=${year}&month=${month}`)
     );
     setExceptions({ columns: data.columns || [], rows: data.rows || [] });
   }
@@ -92,7 +92,7 @@ export default function GenerateView() {
   async function loadSheets(reportId) {
     try {
       const data = await readJson(
-        await apiFetch(`${API}/workbooks/${encodeURIComponent(reportId)}/sheets?source=report`)
+        await apiFetch(`workbooks/${encodeURIComponent(reportId)}/sheets?source=report`)
       );
       setSheets(data.sheets || []);
       const first = (data.sheets || [])[0] || "";
@@ -107,7 +107,7 @@ export default function GenerateView() {
     try {
       const data = await readJson(
         await apiFetch(
-          `${API}/workbooks/${encodeURIComponent(reportId)}/sheets/${encodeURIComponent(sheet)}?source=report`
+          `workbooks/${encodeURIComponent(reportId)}/sheets/${encodeURIComponent(sheet)}?source=report`
         )
       );
       setPreview({ columns: data.columns || [], rows: data.rows || [] });
@@ -122,7 +122,7 @@ export default function GenerateView() {
     setStatus("Generating the commission workbook from SQLite…");
     try {
       const data = await readJson(
-        await apiFetch(`${API}/commission/generate`, {
+        await apiFetch(`commission/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ year, month }),
@@ -146,7 +146,7 @@ export default function GenerateView() {
     try {
       // Kick off the sync (returns immediately — no gateway timeout).
       await readJson(
-        await apiFetch(`${API}/sync/incremental`, {
+        await apiFetch(`sync/incremental`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         })
@@ -155,7 +155,7 @@ export default function GenerateView() {
       let finished = false;
       for (let i = 0; i < 240 && !finished; i++) {
         await new Promise((r) => setTimeout(r, 3000));
-        const st = await readJson(await apiFetch(`${API}/sync/incremental/status`));
+        const st = await readJson(await apiFetch(`sync/incremental/status`));
         if (st.status && st.status !== "running") {
           finished = true;
           if (st.status === "failed") {
@@ -179,7 +179,7 @@ export default function GenerateView() {
   async function handleDownload() {
     if (!summary?.report_id) return;
     try {
-      await downloadApi(`${API}/downloads/reports/${encodeURIComponent(summary.report_id)}`, summary.report_id);
+      await downloadApi(`downloads/reports/${encodeURIComponent(summary.report_id)}`, summary.report_id);
     } catch (err) {
       setError(err);
     }
