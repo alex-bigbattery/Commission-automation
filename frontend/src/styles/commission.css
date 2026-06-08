@@ -2509,6 +2509,11 @@ button {
   border-radius: var(--r-md);
 }
 .ph-matrix-table { font-size: 0.8rem; }
+.ph-matrix-table th:nth-child(4),
+.ph-matrix-table td:nth-child(4) {
+  min-width: 7.5rem;
+  white-space: nowrap;
+}
 .ph-matrix-table .ph-sticky-head {
   position: sticky;
   top: 0;
@@ -2549,8 +2554,41 @@ button {
 .ph-cell-live { background: rgba(22, 163, 74, 0.1); }
 .ph-cell-rlp-fallback { background: rgba(217, 119, 6, 0.08); font-style: italic; }
 .ph-cell-empty { color: var(--bb-muted); }
+.ph-price-unchanged { color: var(--bb-muted); font-size: 0.82rem; white-space: nowrap; }
+.ph-price-changed { color: var(--bb-warning, #b45309); font-size: 0.82rem; font-weight: 500; white-space: nowrap; }
 .ph-filters { margin-bottom: 1rem; }
 .ph-hint { margin: 0.5rem 0; }
+.ph-sku-timeline-table th,
+.ph-sku-timeline-table td {
+  padding: 0.65rem 1.5rem;
+  white-space: nowrap;
+}
+.ph-sku-timeline-table th {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.ph-sku-timeline-table th:first-child,
+.ph-sku-timeline-table td:first-child {
+  padding-left: 1rem;
+}
+.ph-sku-timeline-table th:last-child,
+.ph-sku-timeline-table td:last-child {
+  padding-right: 1.25rem;
+}
+.ph-sku-timeline-table td[rowspan] {
+  vertical-align: middle;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  max-width: 9rem;
+  white-space: normal;
+}
+.ph-col-period-hint {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--bb-text-faint);
+  margin-top: 0.15rem;
+}
 .ph-row-active { background: rgba(22, 163, 74, 0.06); }
 .ph-chart-wrap { margin: 1rem 0; }
 .ph-chart-label { font-size: 0.85rem; color: var(--bb-muted); margin-bottom: 0.35rem; }

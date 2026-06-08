@@ -28,7 +28,7 @@ Granularity = Literal["daily", "weekly", "monthly"]
 ExportMode = Literal["detail", "matrix"]
 ExportFormat = Literal["csv", "xlsx"]
 
-MATRIX_PREVIEW_LIMIT = 100
+MATRIX_PREVIEW_LIMIT = 2000
 MATRIX_EXPORT_LIMIT = 2000
 DETAIL_PREVIEW_LIMIT = 500
 DETAIL_EXPORT_LIMIT = 5000
@@ -37,9 +37,13 @@ MAX_DAILY_COLUMNS_UI = 45
 LEGEND_ROWS = [
     ("accountant_fvprice_*", "Accountant FV_PRICE snapshot"),
     ("imported_rlp_*", "Imported R_LP snapshot / fallback — not confirmed FV_PRICE"),
-    ("zoho_sync_*", "Zoho live sync"),
+    ("zoho_sync_*", "Zoho live sync (forward from sync date)"),
+    ("zoho_catalog_snapshot_*", "Zoho catalog snapshot (items.rate backfill)"),
+    ("R_LP_template", "Template fallback — not from price_history (only when Include fallback is enabled)"),
     ("(blank)", "No price_history coverage for that date"),
 ]
+
+RLP_TEMPLATE_SOURCE_TYPE = "rlp_template_fallback"
 
 
 def default_granularity(from_iso: str, to_iso: str) -> str:
@@ -231,6 +235,24 @@ def _gaps_in_range(history: list[dict[str, Any]], from_iso: str, to_iso: str, to
     return clipped
 
 
+def _summarize_price_change(prices: dict[str, Any | None], dates: list[str]) -> tuple[bool, str, str]:
+    """Distinct MAP levels in range order; label whether price changed across the window."""
+    levels: list[float] = []
+    for d in dates:
+        cell = prices.get(d)
+        if not cell:
+            continue
+        p = float(cell["map_price"])
+        if not levels or levels[-1] != p:
+            levels.append(p)
+    if not levels:
+        return False, "No coverage", "—"
+    if len(levels) == 1:
+        return False, "No change", "No"
+    detail = f"${levels[0]:,.2f} → ${levels[-1]:,.2f}"
+    return True, detail, f"Yes ({detail})"
+
+
 def build_matrix_row(
     sku: str,
     history: list[dict[str, Any]],
@@ -244,7 +266,7 @@ def build_matrix_row(
     include_fallback: bool,
     rlp_map: dict[str, float],
 ) -> dict[str, Any]:
-    current_map, latest_source = _summarize_current(history, today)
+    current_map, _latest_source = _summarize_current(history, today)
     prices: dict[str, Any] = {}
     for d in dates:
         hit = resolve_price_for_date(history, d)
@@ -254,19 +276,24 @@ def build_matrix_row(
             prices[d] = {
                 "map_price": rlp_map[sku],
                 "source": "R_LP_template",
-                "source_type": "rlp_fallback",
+                "source_type": RLP_TEMPLATE_SOURCE_TYPE,
+                "is_fallback": True,
                 "snapshot_month": "",
                 "source_caution": "Template R_LP fallback — not from price_history",
             }
         else:
             prices[d] = None
 
+    price_changed, price_change_label, price_changed_display = _summarize_price_change(prices, dates)
+
     return {
         "sku": sku,
         "item_id": item_id or (history[0]["item_id"] if history else None),
         "item_name": item_name,
         "current_map": current_map,
-        "latest_source": latest_source,
+        "price_changed": price_changed,
+        "price_change_label": price_change_label,
+        "price_changed_display": price_changed_display,
         "prices": prices,
         "coverage_gaps": [{"from": a, "to": b} for a, b in _gaps_in_range(history, from_iso, to_iso, today)],
     }
@@ -425,7 +452,7 @@ def get_price_history_detail_list(
 def _matrix_csv(payload: dict[str, Any]) -> bytes:
     buf = io.StringIO()
     dates = payload["dates"]
-    header = ["SKU", "Item ID", "Item Name", "Current MAP", "Latest Source", *dates]
+    header = ["SKU", "Item ID", "Item Name", "Current MAP", "Price changed", *dates]
     writer = csv.writer(buf)
     writer.writerow(header)
     for row in payload["rows"]:
@@ -434,7 +461,7 @@ def _matrix_csv(payload: dict[str, Any]) -> bytes:
             row.get("item_id") or "",
             row.get("item_name") or "",
             row.get("current_map") if row.get("current_map") is not None else "",
-            row.get("latest_source") or "",
+            row.get("price_changed_display") or row.get("price_change_label") or "",
         ]
         for d in dates:
             cell = row["prices"].get(d)
@@ -468,12 +495,43 @@ def _detail_csv(payload: dict[str, Any]) -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
+def _append_matrix_cell_sources(ws, payload: dict[str, Any]) -> None:
+    dates = payload["dates"]
+    headers = ["SKU", "Date", "MAP Price", "Source", "Source Type", "Is Fallback"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in payload["rows"]:
+        for d in dates:
+            hit = row["prices"].get(d)
+            if not hit:
+                continue
+            is_fb = bool(
+                hit.get("is_fallback")
+                or hit.get("source_type") == RLP_TEMPLATE_SOURCE_TYPE
+                or hit.get("source") == "R_LP_template"
+            )
+            ws.append([
+                row["sku"],
+                d,
+                hit["map_price"],
+                hit.get("source") or "",
+                hit.get("source_type") or "",
+                "Yes" if is_fb else "",
+            ])
+    for r in range(2, ws.max_row + 1):
+        ws.cell(r, 3).number_format = '"$"#,##0.00'
+    ws.freeze_panes = "A2"
+    for i, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(i)].width = min(22, max(10, len(h) + 2))
+
+
 def _matrix_xlsx(payload: dict[str, Any]) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Price Timeline"
     dates = payload["dates"]
-    headers = ["SKU", "Item ID", "Item Name", "Current MAP", "Latest Source", *dates]
+    headers = ["SKU", "Item ID", "Item Name", "Current MAP", "Price change", *dates]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -483,7 +541,7 @@ def _matrix_xlsx(payload: dict[str, Any]) -> bytes:
             row.get("item_id") or "",
             row.get("item_name") or "",
             row.get("current_map"),
-            row.get("latest_source") or "",
+            row.get("price_changed_display") or row.get("price_change_label") or "",
         ]
         for d in dates:
             hit = row["prices"].get(d)
@@ -498,13 +556,21 @@ def _matrix_xlsx(payload: dict[str, Any]) -> bytes:
     for i, _ in enumerate(headers, 1):
         ws.column_dimensions[get_column_letter(i)].width = min(18, max(10, len(str(headers[i - 1])) + 2))
 
+    sources = wb.create_sheet("Cell Sources")
+    _append_matrix_cell_sources(sources, payload)
+
     legend = wb.create_sheet("Legend")
     legend.append(["Source pattern", "Meaning"])
     for cell in legend[1]:
         cell.font = Font(bold=True)
     for pat, meaning in LEGEND_ROWS:
         legend.append([pat, meaning])
-    legend.column_dimensions["A"].width = 24
+    legend.append([])
+    legend.append(["Export setting", "Value"])
+    legend.append(["Include fallback (R_LP template)", "Yes" if payload.get("include_fallback") else "No"])
+    legend.append(["Date range", f"{payload.get('from')} → {payload.get('to')}"])
+    legend.append(["Granularity", str(payload.get("granularity") or "")])
+    legend.column_dimensions["A"].width = 28
     legend.column_dimensions["B"].width = 60
 
     out = io.BytesIO()

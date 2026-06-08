@@ -4,7 +4,9 @@ import { Banner, ErrorBanner, LoadingNotice, Pill } from "./ui.jsx";
 import { IconAlert, IconRefresh, IconSearch } from "./Icons.jsx";
 
 const CATALOG_PAGE = 100;
-const MATRIX_PREVIEW_DEFAULT = 25;
+const MATRIX_PAGE_SIZE_MAX = 2000;
+const MATRIX_PREVIEW_DEFAULT = MATRIX_PAGE_SIZE_MAX;
+const MATRIX_PAGE_SIZE_OPTIONS = [100, 250, 500, 1000, MATRIX_PAGE_SIZE_MAX];
 
 const PH_TABS = [
   { id: "search", label: "Search SKU", hint: "Inspect one SKU's MAP history." },
@@ -27,8 +29,8 @@ function defaultGranularity(fromIso, toIso) {
 function matrixCellClass(sourceType) {
   if (sourceType === "accountant_fvprice") return "ph-cell-accountant";
   if (sourceType === "imported_rlp") return "ph-cell-rlp";
-  if (sourceType === "zoho_live_sync") return "ph-cell-live";
-  if (sourceType === "rlp_fallback") return "ph-cell-rlp-fallback";
+  if (sourceType === "zoho_live_sync" || sourceType === "zoho_catalog_snapshot") return "ph-cell-live";
+  if (sourceType === "rlp_template_fallback" || sourceType === "rlp_fallback") return "ph-cell-rlp-fallback";
   return "";
 }
 
@@ -51,10 +53,27 @@ function money(value) {
   });
 }
 
+function summarizePeriodPriceChange(rows) {
+  if (!rows?.length) return { changed: false, label: "No coverage" };
+  const sorted = [...rows].sort(
+    (a, b) => String(a.effective_from).localeCompare(String(b.effective_from)),
+  );
+  const levels = [];
+  for (const row of sorted) {
+    const p = Number(row.map_price);
+    if (Number.isNaN(p)) continue;
+    if (!levels.length || levels[levels.length - 1] !== p) levels.push(p);
+  }
+  if (!levels.length) return { changed: false, label: "No coverage" };
+  if (levels.length === 1) return { changed: false, label: "No change" };
+  return { changed: true, label: `${money(levels[0])} → ${money(levels[levels.length - 1])}` };
+}
+
 const SOURCE_KIND_META = {
   accountant_fvprice: { label: "Accountant FV_PRICE snapshot", variant: "info" },
   imported_rlp: { label: "Imported R_LP snapshot", variant: "warning" },
   zoho_live_sync: { label: "Zoho live sync", variant: "success" },
+  zoho_catalog_snapshot: { label: "Zoho catalog snapshot", variant: "success" },
   manual: { label: "Manual", variant: "warning" },
   other_snapshot: { label: "Other snapshot", variant: "default" },
   other: { label: "Other", variant: "default" },
@@ -121,6 +140,7 @@ function PriceStepChart({ rows }) {
       accountant_fvprice: "#2563eb",
       imported_rlp: "#d97706",
       zoho_live_sync: "#16a34a",
+      zoho_catalog_snapshot: "#059669",
       manual: "#d97706",
       other_snapshot: "#64748b",
       other: "#64748b",
@@ -240,6 +260,7 @@ export default function PriceHistoryLookup() {
   const [includeFallback, setIncludeFallback] = useState(false);
   const [matrixSkuFilter, setMatrixSkuFilter] = useState("");
   const [matrixPreviewLimit, setMatrixPreviewLimit] = useState(MATRIX_PREVIEW_DEFAULT);
+  const [matrixPage, setMatrixPage] = useState(0);
   const [showMatrixPreview, setShowMatrixPreview] = useState(false);
   const [matrixData, setMatrixData] = useState(null);
   const [matrixLoading, setMatrixLoading] = useState(false);
@@ -368,9 +389,9 @@ export default function PriceHistoryLookup() {
       from: timelineFrom,
       to: timelineTo,
       granularity,
-      include_fallback: String(includeFallback),
       ...extra,
     });
+    if (includeFallback) params.set("include_fallback", "true");
     if (matrixSkuFilter.trim()) params.set("q", matrixSkuFilter.trim());
     return params;
   }, [timelineFrom, timelineTo, granularity, includeFallback, matrixSkuFilter]);
@@ -385,16 +406,19 @@ export default function PriceHistoryLookup() {
     return params;
   }, [detailFrom, detailTo, detailSkuFilter]);
 
-  const loadMatrix = useCallback(async () => {
+  const loadMatrix = useCallback(async (page = matrixPage) => {
     setMatrixLoading(true);
     setMatrixError(null);
     try {
+      const safePage = Math.max(0, page);
       const params = buildMatrixParams({
         limit: String(matrixPreviewLimit),
-        offset: "0",
+        offset: String(safePage * matrixPreviewLimit),
       });
       const res = await apiFetch(`${API}/settings/price-history/matrix?${params.toString()}`);
-      setMatrixData(await readJson(res));
+      const payload = await readJson(res);
+      setMatrixData(payload);
+      setMatrixPage(safePage);
       setShowMatrixPreview(true);
     } catch (e) {
       setMatrixError(e);
@@ -403,7 +427,18 @@ export default function PriceHistoryLookup() {
     } finally {
       setMatrixLoading(false);
     }
-  }, [buildMatrixParams, matrixPreviewLimit]);
+  }, [buildMatrixParams, matrixPreviewLimit, matrixPage]);
+
+  const resetMatrixPreview = useCallback(() => {
+    setMatrixPage(0);
+    setShowMatrixPreview(false);
+    setMatrixData(null);
+  }, []);
+
+  const viewMatrix = useCallback(() => {
+    setMatrixPage(0);
+    loadMatrix(0);
+  }, [loadMatrix]);
 
   const loadDetailList = useCallback(async () => {
     setDetailListLoading(true);
@@ -489,6 +524,11 @@ export default function PriceHistoryLookup() {
   const matrixDates = matrixData?.dates ?? [];
   const matrixRows = matrixData?.rows ?? [];
   const matrixWarnings = matrixData?.warnings ?? [];
+  const matrixTotalSkus = matrixData?.total_skus ?? 0;
+  const matrixOffset = matrixData?.offset ?? 0;
+  const matrixPages = Math.max(1, Math.ceil(matrixTotalSkus / matrixPreviewLimit));
+  const matrixRangeStart = matrixTotalSkus ? matrixOffset + 1 : 0;
+  const matrixRangeEnd = matrixOffset + (matrixData?.count ?? 0);
   const manyDateColumns = showMatrixPreview && matrixDates.length > 45;
 
   const filteredDetailRows = useMemo(() => {
@@ -504,6 +544,10 @@ export default function PriceHistoryLookup() {
   }, [detailList, detailSourceFilter, detailSourceType]);
 
   const skuRows = detail?.rows ?? [];
+  const skuPeriodPriceChange = useMemo(
+    () => summarizePeriodPriceChange(skuRows),
+    [skuRows],
+  );
   const skuWarnings = detail?.warnings ?? [];
   const sources = detail?.sources ?? [];
   const months = detail?.snapshot_months ?? [];
@@ -680,15 +724,21 @@ export default function PriceHistoryLookup() {
                 {!detailLoading && skuRows.length > 0 ? <PriceStepChart rows={skuRows} /> : null}
 
                 <div className="table-wrap">
-                  <table className="data-table settings-table">
+                  <table className="data-table settings-table ph-sku-timeline-table">
                     <thead>
                       <tr>
                         <th className="cell-number">MAP price</th>
                         <th>Effective from</th>
                         <th>Effective to</th>
-                        <th>Source</th>
-                        <th>Type</th>
                         <th>Snapshot month</th>
+                        <th>
+                          Price change
+                          {dateFrom || dateTo ? (
+                            <span className="ph-col-period-hint">
+                              {dateFrom && dateTo ? ` (${dateFrom} → ${dateTo})` : dateFrom ? ` (from ${dateFrom})` : ` (to ${dateTo})`}
+                            </span>
+                          ) : null}
+                        </th>
                         <th>Active today</th>
                         <th>Captured at</th>
                       </tr>
@@ -699,16 +749,22 @@ export default function PriceHistoryLookup() {
                           <td className="cell-number">{money(row.map_price)}</td>
                           <td>{row.effective_from}</td>
                           <td>{row.effective_to_display}</td>
-                          <td className="cell-trunc" title={row.source}>{row.source}</td>
-                          <td><SourceTypeCell row={row} /></td>
                           <td>{row.snapshot_month}</td>
+                          {i === 0 ? (
+                            <td
+                              rowSpan={skuRows.length}
+                              className={skuPeriodPriceChange.changed ? "ph-price-changed" : "ph-price-unchanged"}
+                            >
+                              {skuPeriodPriceChange.label}
+                            </td>
+                          ) : null}
                           <td>{row.is_active_for_today ? "Yes" : "—"}</td>
                           <td className="cell-trunc">{row.captured_at}</td>
                         </tr>
                       ))}
                       {!detailLoading && skuRows.length === 0 ? (
                         <tr>
-                          <td colSpan={8}>
+                          <td colSpan={7}>
                             <p className="text-faint" style={{ padding: "1rem 0" }}>
                               No price history rows for this SKU{hasDetailFilters ? " with the current filters" : ""}.
                             </p>
@@ -794,11 +850,11 @@ export default function PriceHistoryLookup() {
           <div className="table-toolbar settings-filters ph-timeline-filters">
             <label className="settings-filter-label">
               From
-              <input type="date" value={timelineFrom} onChange={(e) => { setTimelineFrom(e.target.value); setShowMatrixPreview(false); }} />
+              <input type="date" value={timelineFrom} onChange={(e) => { setTimelineFrom(e.target.value); resetMatrixPreview(); }} />
             </label>
             <label className="settings-filter-label">
               To
-              <input type="date" value={timelineTo} onChange={(e) => { setTimelineTo(e.target.value); setShowMatrixPreview(false); }} />
+              <input type="date" value={timelineTo} onChange={(e) => { setTimelineTo(e.target.value); resetMatrixPreview(); }} />
             </label>
             <label className="settings-filter-label">
               Granularity
@@ -807,7 +863,7 @@ export default function PriceHistoryLookup() {
                 onChange={(e) => {
                   setGranularity(e.target.value);
                   setGranularityTouched(true);
-                  setShowMatrixPreview(false);
+                  resetMatrixPreview();
                 }}
               >
                 <option value="daily">Daily</option>
@@ -820,30 +876,38 @@ export default function PriceHistoryLookup() {
               <input
                 type="search"
                 value={matrixSkuFilter}
-                onChange={(e) => { setMatrixSkuFilter(e.target.value); setShowMatrixPreview(false); }}
+                onChange={(e) => { setMatrixSkuFilter(e.target.value); resetMatrixPreview(); }}
                 placeholder="Optional SKU filter…"
               />
             </label>
             <label className="settings-filter-label">
-              Preview rows
+              Rows per page
               <select
                 value={matrixPreviewLimit}
-                onChange={(e) => setMatrixPreviewLimit(Number(e.target.value))}
+                onChange={(e) => {
+                  setMatrixPreviewLimit(Number(e.target.value));
+                  resetMatrixPreview();
+                }}
               >
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
+                {MATRIX_PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n === MATRIX_PAGE_SIZE_MAX ? `${n} (max)` : n}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="settings-filter-label ph-checkbox-label">
               <input
                 type="checkbox"
                 checked={includeFallback}
-                onChange={(e) => setIncludeFallback(e.target.checked)}
+                onChange={(e) => {
+                  setIncludeFallback(e.target.checked);
+                  resetMatrixPreview();
+                }}
               />
               Include fallback prices (R_LP template)
             </label>
-            <button type="button" className="btn btn-sm btn-primary" onClick={loadMatrix} disabled={matrixLoading}>
+            <button type="button" className="btn btn-sm btn-primary" onClick={viewMatrix} disabled={matrixLoading}>
               View Matrix
             </button>
           </div>
@@ -854,7 +918,7 @@ export default function PriceHistoryLookup() {
             <button type="button" className="btn btn-sm" onClick={() => exportMatrix("xlsx")}>Matrix Excel</button>
           </div>
 
-          <ErrorBanner error={matrixError} onRetry={loadMatrix} />
+          <ErrorBanner error={matrixError} onRetry={viewMatrix} />
           {matrixLoading ? <LoadingNotice>Building matrix preview…</LoadingNotice> : null}
 
           {manyDateColumns ? (
@@ -867,9 +931,11 @@ export default function PriceHistoryLookup() {
           {showMatrixPreview && !matrixLoading && matrixData ? (
             <>
               <p className="text-faint ph-hint">
-                Showing first {matrixData.count} of {matrixData.total_skus} SKU(s)
+                Showing {matrixRangeStart}–{matrixRangeEnd} of {matrixTotalSkus} SKU(s)
+                · page {matrixPage + 1} of {matrixPages}
                 · {matrixData.date_count} {matrixData.granularity} column(s)
                 · {timelineFrom} → {timelineTo}
+                · fallback {matrixData.include_fallback ? "on" : "off"}
               </p>
               {matrixWarnings.map((w, i) => (
                 <Banner key={`mw-${i}`} type="warning" icon={IconAlert}>{w}</Banner>
@@ -881,7 +947,7 @@ export default function PriceHistoryLookup() {
                       <th className="ph-sticky-col ph-sticky-head">SKU</th>
                       <th className="ph-sticky-col-2 ph-sticky-head">Item ID</th>
                       <th className="ph-sticky-col-3 ph-sticky-head cell-number">Current MAP</th>
-                      <th>Latest Source</th>
+                      <th className="ph-sticky-head">Price changed</th>
                       {matrixDates.map((d) => <th key={d} className="cell-number ph-date-col ph-sticky-head">{d}</th>)}
                     </tr>
                   </thead>
@@ -891,7 +957,14 @@ export default function PriceHistoryLookup() {
                         <td className="ph-sticky-col"><code>{row.sku}</code></td>
                         <td className="ph-sticky-col-2">{row.item_id || "—"}</td>
                         <td className="ph-sticky-col-3 cell-number">{money(row.current_map)}</td>
-                        <td className="cell-trunc" title={row.latest_source || ""}>{row.latest_source || "—"}</td>
+                        <td
+                          className={row.price_changed ? "ph-price-changed" : "ph-price-unchanged"}
+                          title={row.price_change_label && row.price_change_label !== row.price_changed_display
+                            ? row.price_change_label
+                            : undefined}
+                        >
+                          {row.price_changed_display || row.price_change_label || "—"}
+                        </td>
                         {matrixDates.map((d) => (
                           <td key={`${row.sku}-${d}`} className="cell-number">
                             <MatrixPriceCell cell={row.prices?.[d]} />
@@ -905,6 +978,30 @@ export default function PriceHistoryLookup() {
                   </tbody>
                 </table>
               </div>
+              {matrixPages > 1 ? (
+                <div className="ph-pagination">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={matrixPage <= 0 || matrixLoading}
+                    onClick={() => loadMatrix(matrixPage - 1)}
+                  >
+                    Previous
+                  </button>
+                  <span className="text-faint">
+                    Page {matrixPage + 1} of {matrixPages}
+                    {" · "}{matrixPreviewLimit} per page
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={matrixPage >= matrixPages - 1 || matrixLoading}
+                    onClick={() => loadMatrix(matrixPage + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
             </>
           ) : (
             !matrixLoading ? (
@@ -942,6 +1039,7 @@ export default function PriceHistoryLookup() {
                 <option value="accountant_fvprice">Accountant FV_PRICE</option>
                 <option value="imported_rlp">Imported R_LP</option>
                 <option value="zoho_live_sync">Zoho live sync</option>
+                <option value="zoho_catalog_snapshot">Zoho catalog snapshot</option>
               </select>
             </label>
             <label className="settings-filter-label">

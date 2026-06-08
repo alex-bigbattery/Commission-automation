@@ -298,6 +298,7 @@ def get_roster_settings() -> dict[str, Any]:
 # Matches zoho_price_history_sync.FAR_FUTURE — open-ended live rows.
 FAR_FUTURE = "9999-12-31"
 ZOHO_SYNC_PREFIX = "zoho_sync_"
+ZOHO_CATALOG_SNAPSHOT_PREFIX = "zoho_catalog_snapshot_"
 ACCOUNTANT_FVPRICE_PREFIX = "accountant_fvprice_"
 IMPORTED_RLP_PREFIX = "imported_rlp_"
 IMPORTED_RLP_CAUTION = "R_LP fallback source — not confirmed FV_PRICE."
@@ -320,6 +321,8 @@ def _source_kind(source: str, snapshot_month: str) -> str:
     src = str(source or "")
     if src.startswith(ZOHO_SYNC_PREFIX):
         return "zoho_live_sync"
+    if src.startswith(ZOHO_CATALOG_SNAPSHOT_PREFIX):
+        return "zoho_catalog_snapshot"
     if src.startswith(IMPORTED_RLP_PREFIX):
         return "imported_rlp"
     if src.startswith(ACCOUNTANT_FVPRICE_PREFIX):

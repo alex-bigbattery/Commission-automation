@@ -77,6 +77,21 @@ TEMPLATES_DIR = BASE_DIR / "data" / "templates"
 MASTER_TEMPLATE = TEMPLATES_DIR / "master_template_clean.xlsx"
 SYNC_SCRIPT = SRC_DIR / "db" / "sync_zoho_to_sqlite.py"
 
+
+def parse_query_bool(value: str | bool | None, *, default: bool = False) -> bool:
+    """Parse include_fallback-style query params reliably (false/0/no must be False)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    v = str(value).strip().lower()
+    if v in ("", "0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return default
+
+
 app = FastAPI(title="Commission Automation API", version="1.1.0")
 
 _default_origins = [
@@ -1257,7 +1272,7 @@ def settings_price_history_matrix(
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     granularity: str | None = Query(None),
-    include_fallback: bool = Query(False),
+    include_fallback: str | None = Query(None),
     limit: int = Query(100, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ) -> dict:
@@ -1268,7 +1283,7 @@ def settings_price_history_matrix(
             from_date=from_date,
             to_date=to_date,
             granularity=granularity,
-            include_fallback=include_fallback,
+            include_fallback=parse_query_bool(include_fallback),
             limit=limit,
             offset=offset,
             template_path=MASTER_TEMPLATE,
@@ -1303,7 +1318,7 @@ def settings_price_history_export(
     from_date: str | None = Query(None, alias="from"),
     to_date: str | None = Query(None, alias="to"),
     granularity: str | None = Query(None),
-    include_fallback: bool = Query(False),
+    include_fallback: str | None = Query(None),
 ):
     """Download price_history matrix or detail as CSV / XLSX (read-only generation)."""
     try:
@@ -1314,7 +1329,7 @@ def settings_price_history_export(
             from_date=from_date,
             to_date=to_date,
             granularity=granularity,
-            include_fallback=include_fallback,
+            include_fallback=parse_query_bool(include_fallback),
             template_path=MASTER_TEMPLATE,
         )
     except ValueError as exc:

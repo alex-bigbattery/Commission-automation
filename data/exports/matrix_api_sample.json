@@ -1,0 +1,488 @@
+{
+  "from": "2026-04-01",
+  "to": "2026-06-08",
+  "granularity": "daily",
+  "dates": [
+    "2026-04-01",
+    "2026-04-02",
+    "2026-04-03",
+    "2026-04-04",
+    "2026-04-05",
+    "2026-04-06",
+    "2026-04-07",
+    "2026-04-08"
+  ],
+  "row": {
+    "sku": "FEAGL-48016-G2",
+    "current_map": 650.0,
+    "price_changed": true,
+    "price_change_label": "$740.00 \u2192 $650.00",
+    "prices": {
+      "2026-04-01": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-02": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-03": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-04": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-05": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-06": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-07": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-08": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-09": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-10": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-11": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-12": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-13": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-14": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-15": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-16": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-17": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-18": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-19": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-20": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-21": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-22": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-23": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-24": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-25": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-26": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-27": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-28": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-29": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-04-30": {
+        "map_price": 740.0,
+        "source": "accountant_fvprice_2026_04",
+        "source_type": "accountant_fvprice",
+        "snapshot_month": "2026-04",
+        "source_caution": null
+      },
+      "2026-05-01": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-02": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-03": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-04": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-05": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-06": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-07": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-08": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-09": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-10": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-11": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-12": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-13": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-14": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-15": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-16": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-17": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-18": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-19": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-20": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-21": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-22": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-23": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-24": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-25": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-26": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-27": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-28": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-29": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-30": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-05-31": {
+        "map_price": 740.0,
+        "source": "imported_rlp_2026_05",
+        "source_type": "imported_rlp",
+        "snapshot_month": "2026-05",
+        "source_caution": "R_LP fallback source \u2014 not confirmed FV_PRICE."
+      },
+      "2026-06-01": null,
+      "2026-06-02": null,
+      "2026-06-03": null,
+      "2026-06-04": null,
+      "2026-06-05": {
+        "map_price": 650.0,
+        "source": "zoho_sync_20260605211158",
+        "source_type": "zoho_live_sync",
+        "snapshot_month": "live",
+        "source_caution": null
+      },
+      "2026-06-06": {
+        "map_price": 650.0,
+        "source": "zoho_sync_20260605211158",
+        "source_type": "zoho_live_sync",
+        "snapshot_month": "live",
+        "source_caution": null
+      },
+      "2026-06-07": {
+        "map_price": 650.0,
+        "source": "zoho_sync_20260605211158",
+        "source_type": "zoho_live_sync",
+        "snapshot_month": "live",
+        "source_caution": null
+      },
+      "2026-06-08": {
+        "map_price": 650.0,
+        "source": "zoho_sync_20260605211158",
+        "source_type": "zoho_live_sync",
+        "snapshot_month": "live",
+        "source_caution": null
+      }
+    },
+    "coverage_gaps": [
+      {
+        "from": "2026-06-01",
+        "to": "2026-06-04"
+      }
+    ]
+  }
+}
