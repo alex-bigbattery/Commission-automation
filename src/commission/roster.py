@@ -384,6 +384,9 @@ def issue_found(row: dict[str, Any]) -> str:
     if "PRICE_HISTORY_NO_WINDOW" in flags:
         return "SKU has snapshot rows but none cover the sale date — used fallback MAP"
 
+    if "RLP_FALLBACK_NO_FVPRICE" in flags:
+        return "Using R_LP fallback because official FV_PRICE snapshot is missing"
+
     # Discount above the commission-table limit
     if "DISCOUNT_OVER_60" in flags:
         return "Discount over 60% — non-commissionable"
@@ -469,6 +472,9 @@ def suggested_action(row: dict[str, Any]) -> str:
     # snapshot rows exist but no covering window
     if "PRICE_HISTORY_NO_WINDOW" in flags:
         return "Verify fallback MAP for this sale date; consider loading a covering snapshot"
+
+    if "RLP_FALLBACK_NO_FVPRICE" in flags:
+        return "Restore accountant FV_PRICE snapshot — R_LP is interim fallback only"
 
     # Discount above the commission-table limit
     if "DISCOUNT_OVER_60" in flags:

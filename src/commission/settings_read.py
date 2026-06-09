@@ -302,6 +302,9 @@ ZOHO_CATALOG_SNAPSHOT_PREFIX = "zoho_catalog_snapshot_"
 ACCOUNTANT_FVPRICE_PREFIX = "accountant_fvprice_"
 IMPORTED_RLP_PREFIX = "imported_rlp_"
 IMPORTED_RLP_CAUTION = "R_LP fallback source — not confirmed FV_PRICE."
+ZOHO_CATALOG_CAUTION = (
+    "Unverified catalog backfill — not confirmed historical MAP."
+)
 
 
 def _today_iso() -> str:
@@ -358,11 +361,16 @@ def _enrich_price_row(row: dict[str, Any], today: str) -> dict[str, Any]:
         and source.startswith(ZOHO_SYNC_PREFIX)
     )
     is_active = _row_active_on(today, str(row.get("effective_from") or ""), effective_to)
+    caution = None
+    if kind == "imported_rlp":
+        caution = IMPORTED_RLP_CAUTION
+    elif kind == "zoho_catalog_snapshot":
+        caution = ZOHO_CATALOG_CAUTION
     return {
         **row,
         "effective_to_display": _format_effective_to(effective_to),
         "source_kind": kind,
-        "source_caution": IMPORTED_RLP_CAUTION if kind == "imported_rlp" else None,
+        "source_caution": caution,
         "is_snapshot": is_snapshot,
         "is_current_live": is_current_live,
         "is_active_for_today": is_active,
@@ -416,6 +424,12 @@ def _detect_price_history_warnings(rows: list[dict[str, Any]], today: str) -> li
     if imported_rlp:
         warnings.append(
             f"{IMPORTED_RLP_CAUTION} ({len(imported_rlp)} row(s) on this SKU.)"
+        )
+
+    catalog_backfill = [r for r in rows if r.get("source_kind") == "zoho_catalog_snapshot"]
+    if catalog_backfill:
+        warnings.append(
+            f"{ZOHO_CATALOG_CAUTION} ({len(catalog_backfill)} row(s) on this SKU.)"
         )
 
     for gap_from, gap_to in _detect_coverage_gaps(rows):

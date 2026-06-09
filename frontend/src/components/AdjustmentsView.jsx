@@ -672,6 +672,13 @@ export default function AdjustmentsView() {
 
       {status && <Banner type="success" icon={IconCheck}>{status}</Banner>}
       {error && <ErrorBanner error={error} onRetry={load} />}
+      {Array.isArray(kpis.map_warnings) && kpis.map_warnings.length > 0 && (
+        <Banner type="warning" icon={IconAlert}>
+          <strong>MAP pricing interim fallback.</strong>{" "}
+          {kpis.map_warnings.join(" ")}
+          {" "}R_LP is not official accountant FV_PRICE.
+        </Banner>
+      )}
 
       <div className={loadingPeriod ? "content-loading" : ""}>
       {/* KPIs */}

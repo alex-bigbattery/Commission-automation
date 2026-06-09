@@ -104,6 +104,7 @@ _CATEGORY_TAG_MAP: tuple[tuple[str, str], ...] = (
     ("COMPANY_ACCOUNT",         "company_account"),
     ("EXECUTIVE_ACCOUNT",       "executive_account"),
     ("PRICE_HISTORY_NO_WINDOW", "price_map_issue"),
+    ("RLP_FALLBACK_NO_FVPRICE", "price_map_issue"),
     ("MISSING_MAP",             "price_map_issue"),
     ("MAP_ANOMALY_LOW",         "price_map_issue"),
 )
@@ -135,6 +136,14 @@ def _category_tags_from_flags(flags_str: str | None) -> list[str]:
 # diverge code totals from the Excel-formula totals.
 BRUCE_REP_RATE = 0.15
 BRUCE_COMPANY_RATE = 0.20
+
+# price_history source prefixes — commission resolver ignores catalog backfill rows.
+ZOHO_CATALOG_SNAPSHOT_PREFIX = "zoho_catalog_snapshot_"
+ACCOUNTANT_FVPRICE_PREFIX = "accountant_fvprice_"
+RLP_FALLBACK_NO_FVPRICE_FLAG = "RLP_FALLBACK_NO_FVPRICE"
+RLP_FALLBACK_NO_FVPRICE_MSG = (
+    "Using R_LP fallback because official FV_PRICE snapshot is missing."
+)
 
 # Symmetric lower-side anomaly check for the snapshot/R_LP MAP. A resolved MAP that is
 # much LOWER than the live items.rate (e.g. a decimal-point typo making $100 look like
@@ -439,6 +448,10 @@ def _load_price_history(conn: DbConnection) -> dict[str, list[tuple[date, date, 
     engine cleanly falls back to the curated R_LP / items.rate map. This NEVER reads or
     overwrites R_LP; it is an independent, additive price source that takes priority.
 
+    Rows with ``source`` starting with ``zoho_catalog_snapshot_`` are **excluded** from
+    commission MAP resolution. They remain in the DB for Settings / Price History audit
+    only — they are unverified current-catalog backfill, not official historical MAP.
+
     The fourth tuple element ``is_live`` is True when ``snapshot_month == 'live'``
     (a forward-looking Zoho-sync row), False for a closed-month accountant snapshot.
     The resolver uses this flag to enforce: closed-month snapshots WIN over live rows
@@ -448,6 +461,7 @@ def _load_price_history(conn: DbConnection) -> dict[str, list[tuple[date, date, 
     Hardening contract (defense-in-depth on top of schema NOT NULL + UNIQUE):
       * Skip any row whose ``effective_from``/``effective_to`` does not parse as ISO date.
       * Skip any row whose ``map_price`` is <= 0.
+      * Skip ``zoho_catalog_snapshot_*`` sources (audit/UI only).
       * ``ORDER BY sku, effective_from, id`` so the per-SKU list is deterministic across
         SQLite and Postgres. Combined with the resolver's non-strict ``>=`` tie-break
         this guarantees the LATER LOAD (highest id) wins on tied effective_from.
@@ -455,13 +469,15 @@ def _load_price_history(conn: DbConnection) -> dict[str, list[tuple[date, date, 
     out: dict[str, list[tuple[date, date, float, bool]]] = {}
     try:
         rows = conn.execute(
-            "SELECT sku, map_price, effective_from, effective_to, snapshot_month "
+            "SELECT sku, map_price, effective_from, effective_to, snapshot_month, source "
             "FROM price_history WHERE sku IS NOT NULL AND sku != '' "
             "ORDER BY sku, effective_from, id"
         ).fetchall()
     except Exception:
         return out
     for row in rows:
+        if str(row["source"] or "").startswith(ZOHO_CATALOG_SNAPSHOT_PREFIX):
+            continue
         sku = str(row["sku"]).strip().upper()
         if not sku:
             continue
@@ -544,6 +560,35 @@ def _resolve_map_price(
         if best_live is not None:
             return best_live[1]
     return fallback_map.get(sku, 0.0)
+
+
+def _price_history_resolves(
+    sku: str,
+    as_of: date | None,
+    price_history: dict[str, list[tuple[date, date, float, bool]]],
+) -> bool:
+    """True when ``_resolve_map_price`` would take MAP from price_history, not fallback."""
+    if as_of is None:
+        return False
+    entries = price_history.get(sku.strip().upper())
+    if not entries:
+        return False
+    best_month: date | None = None
+    best_live: date | None = None
+    for eff_from, eff_to, price, is_live in entries:
+        if eff_from > as_of or as_of > eff_to or price <= 0:
+            continue
+        if is_live:
+            if best_live is None or eff_from >= best_live:
+                best_live = eff_from
+        else:
+            if best_month is None or eff_from >= best_month:
+                best_month = eff_from
+    return best_month is not None or best_live is not None
+
+
+def _accountant_fvprice_source(year: int, month: int) -> str:
+    return f"{ACCOUNTANT_FVPRICE_PREFIX}{year:04d}_{month:02d}"
 
 
 def _load_invoice_meta_map(conn: DbConnection, year: int, month: int) -> dict[str, dict[str, str]]:
@@ -936,10 +981,18 @@ def build_salespeople_from_sqlite(
         invoice_lines = _load_invoice_lines_with_context(conn, year, month)
         item_map = _load_item_map(conn)
         price_history = _load_price_history(conn)
+        accountant_source = _accountant_fvprice_source(year, month)
+        accountant_snapshot_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM price_history WHERE source = ?",
+                (accountant_source,),
+            ).fetchone()["c"]
+        )
     finally:
         conn.close()
 
     tiers = tiers or DEFAULT_TIERS
+    rlp = rlp_map or {}
     # Fallback MAP: curated R_LP overrides the live catalog; catalog fills any gaps.
     # price_history (effective-dated snapshots) takes priority over this whole fallback
     # and is resolved per line by sale date in the loop below.
@@ -962,6 +1015,7 @@ def build_salespeople_from_sqlite(
 
     # ---- Phase 1: build surviving commission lines with SYSTEM values ----
     lines: list[_Line] = []
+    rlp_fallback_lines = 0
     for rec in invoice_lines:
         # Rule 1 — route by CF.Sales Team exactly like Accounting does.
         team = (rec.sales_team or "").strip().lower()
@@ -1131,6 +1185,11 @@ def build_salespeople_from_sqlite(
                 amount=rec.item_total,
                 reason=f"price_history has entries for {sku_u} but none cover {as_of.isoformat()} — using fallback",
             ))
+        # Closed-month MAP from R_LP template — not official accountant FV_PRICE.
+        if (as_of is not None and map_price > 0 and not _price_history_resolves(sku_u, as_of, price_history)
+                and sku_u in rlp):
+            flags.append(RLP_FALLBACK_NO_FVPRICE_FLAG)
+            rlp_fallback_lines += 1
         # Hardening flag: the resolved MAP is much LOWER than the live items.rate —
         # likely a typo in the snapshot (e.g. $10 instead of $100). Symmetric to
         # PRICE_ANOMALY which catches MAP-too-high.
@@ -1403,6 +1462,18 @@ def build_salespeople_from_sqlite(
     # Draft while there are unassigned lines, shipments are missing, or any
     # adjustment is not yet approved.
     kpis["is_draft"] = bool(pending_lines > 0 or (not shipment_present) or approval_incomplete)
+    map_warnings: list[str] = []
+    if accountant_snapshot_count == 0 and rlp_fallback_lines > 0:
+        map_warnings.append(RLP_FALLBACK_NO_FVPRICE_MSG)
+        map_warnings.append(
+            f"No {accountant_source} rows in price_history for {year:04d}-{month:02d}."
+        )
+    if year == 2026 and month == 4 and accountant_snapshot_count == 0:
+        map_warnings.append("accountant_fvprice_2026_04 is missing from price_history.")
+    kpis["map_warnings"] = map_warnings
+    kpis["rlp_fallback_lines"] = rlp_fallback_lines
+    kpis["accountant_fvprice_present"] = accountant_snapshot_count > 0
+    kpis["accountant_fvprice_source"] = accountant_source
     return GenerationResult(
         salespeople=list(data_by_sheet.values()),
         exceptions=exceptions,

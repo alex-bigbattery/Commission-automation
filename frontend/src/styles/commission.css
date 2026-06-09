@@ -2552,6 +2552,7 @@ button {
 .ph-cell-accountant { background: rgba(37, 99, 235, 0.1); }
 .ph-cell-rlp { background: rgba(217, 119, 6, 0.12); }
 .ph-cell-live { background: rgba(22, 163, 74, 0.1); }
+.ph-cell-catalog-backfill { background: rgba(217, 119, 6, 0.14); }
 .ph-cell-rlp-fallback { background: rgba(217, 119, 6, 0.08); font-style: italic; }
 .ph-cell-empty { color: var(--bb-muted); }
 .ph-price-unchanged { color: var(--bb-muted); font-size: 0.82rem; white-space: nowrap; }

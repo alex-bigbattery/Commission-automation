@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 from src.commission.settings_read import (
     FAR_FUTURE,
     IMPORTED_RLP_CAUTION,
+    ZOHO_CATALOG_CAUTION,
     _detect_coverage_gaps,
     _enrich_price_row,
     _is_open_end,
@@ -38,7 +39,7 @@ LEGEND_ROWS = [
     ("accountant_fvprice_*", "Accountant FV_PRICE snapshot"),
     ("imported_rlp_*", "Imported R_LP snapshot / fallback — not confirmed FV_PRICE"),
     ("zoho_sync_*", "Zoho live sync (forward from sync date)"),
-    ("zoho_catalog_snapshot_*", "Zoho catalog snapshot (items.rate backfill)"),
+    ("zoho_catalog_snapshot_*", "Unverified catalog backfill — not confirmed historical MAP"),
     ("R_LP_template", "Template fallback — not from price_history (only when Include fallback is enabled)"),
     ("(blank)", "No price_history coverage for that date"),
 ]
@@ -126,12 +127,17 @@ def resolve_price_for_date(
     pool.sort(key=lambda r: (str(r.get("effective_from") or ""), int(r.get("id") or 0)), reverse=True)
     row = pool[0]
     kind = _source_kind(str(row.get("source") or ""), str(row.get("snapshot_month") or ""))
+    caution = None
+    if kind == "imported_rlp":
+        caution = IMPORTED_RLP_CAUTION
+    elif kind == "zoho_catalog_snapshot":
+        caution = ZOHO_CATALOG_CAUTION
     return {
         "map_price": float(row["map_price"]),
         "source": str(row.get("source") or ""),
         "source_type": kind,
         "snapshot_month": str(row.get("snapshot_month") or ""),
-        "source_caution": IMPORTED_RLP_CAUTION if kind == "imported_rlp" else None,
+        "source_caution": caution,
     }
 
 

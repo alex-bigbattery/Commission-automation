@@ -29,7 +29,8 @@ function defaultGranularity(fromIso, toIso) {
 function matrixCellClass(sourceType) {
   if (sourceType === "accountant_fvprice") return "ph-cell-accountant";
   if (sourceType === "imported_rlp") return "ph-cell-rlp";
-  if (sourceType === "zoho_live_sync" || sourceType === "zoho_catalog_snapshot") return "ph-cell-live";
+  if (sourceType === "zoho_catalog_snapshot") return "ph-cell-catalog-backfill";
+  if (sourceType === "zoho_live_sync") return "ph-cell-live";
   if (sourceType === "rlp_template_fallback" || sourceType === "rlp_fallback") return "ph-cell-rlp-fallback";
   return "";
 }
@@ -73,7 +74,11 @@ const SOURCE_KIND_META = {
   accountant_fvprice: { label: "Accountant FV_PRICE snapshot", variant: "info" },
   imported_rlp: { label: "Imported R_LP snapshot", variant: "warning" },
   zoho_live_sync: { label: "Zoho live sync", variant: "success" },
-  zoho_catalog_snapshot: { label: "Zoho catalog snapshot", variant: "success" },
+  zoho_catalog_snapshot: {
+    label: "Unverified catalog backfill",
+    variant: "warning",
+    caution: "Unverified catalog backfill — not confirmed historical MAP.",
+  },
   manual: { label: "Manual", variant: "warning" },
   other_snapshot: { label: "Other snapshot", variant: "default" },
   other: { label: "Other", variant: "default" },
@@ -85,12 +90,14 @@ function SourceBadge({ kind }) {
 }
 
 function SourceTypeCell({ row }) {
+  const def = SOURCE_KIND_META[row.source_kind] || SOURCE_KIND_META.other;
+  const caution = row.source_caution || def.caution;
   return (
     <div className="ph-source-type">
       <SourceBadge kind={row.source_kind} />
-      {row.source_caution ? (
-        <span className="ph-source-caution" title={row.source_caution}>
-          {row.source_caution}
+      {caution ? (
+        <span className="ph-source-caution" title={caution}>
+          {caution}
         </span>
       ) : null}
     </div>
@@ -103,7 +110,9 @@ function SourceLegend() {
       <SourceBadge kind="accountant_fvprice" />
       <SourceBadge kind="imported_rlp" />
       <SourceBadge kind="zoho_live_sync" />
+      <SourceBadge kind="zoho_catalog_snapshot" />
       <span className="text-faint ph-source-legend-note">
+        Unverified catalog backfill — not confirmed historical MAP (audit only; excluded from commission MAP).
         Imported R_LP rows are fallback/reference only — not confirmed accountant FV_PRICE.
       </span>
     </div>
@@ -140,7 +149,7 @@ function PriceStepChart({ rows }) {
       accountant_fvprice: "#2563eb",
       imported_rlp: "#d97706",
       zoho_live_sync: "#16a34a",
-      zoho_catalog_snapshot: "#059669",
+      zoho_catalog_snapshot: "#d97706",
       manual: "#d97706",
       other_snapshot: "#64748b",
       other: "#64748b",
@@ -1039,7 +1048,7 @@ export default function PriceHistoryLookup() {
                 <option value="accountant_fvprice">Accountant FV_PRICE</option>
                 <option value="imported_rlp">Imported R_LP</option>
                 <option value="zoho_live_sync">Zoho live sync</option>
-                <option value="zoho_catalog_snapshot">Zoho catalog snapshot</option>
+                <option value="zoho_catalog_snapshot">Unverified catalog backfill</option>
               </select>
             </label>
             <label className="settings-filter-label">
