@@ -45,11 +45,20 @@ function ReadOnlyBanner() {
   );
 }
 
+function templateDisplayLabel(template) {
+  if (!template) return "Not found";
+  if (template.filename) return template.filename;
+  if (!template.path) return "Not found";
+  const normalized = String(template.path).replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || template.path;
+}
+
 function ConfigMeta({ template }) {
   if (!template) return null;
   return (
     <p className="text-faint settings-meta">
-      Template: {template.exists ? template.path : "Not found"}
+      Template: {template.exists ? templateDisplayLabel(template) : "Not found"}
       {template.modified_at ? ` · last modified ${new Date(template.modified_at).toLocaleString()}` : ""}
     </p>
   );

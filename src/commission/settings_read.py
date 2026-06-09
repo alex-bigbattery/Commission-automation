@@ -48,12 +48,15 @@ def _template_meta(template_path: Path | None) -> dict[str, Any]:
     if not template_path or not template_path.exists():
         return {
             "path": str(template_path) if template_path else None,
+            "filename": Path(template_path).name if template_path else None,
             "exists": False,
             "modified_at": None,
         }
     stat = template_path.stat()
+    resolved = template_path.resolve()
     return {
-        "path": str(template_path.resolve()),
+        "path": str(resolved),
+        "filename": resolved.name,
         "exists": True,
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
     }

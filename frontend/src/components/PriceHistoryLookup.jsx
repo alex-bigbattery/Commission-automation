@@ -571,7 +571,7 @@ export default function PriceHistoryLookup() {
 
       {dbDiag?.rows != null ? (
         <p className="text-faint ph-hint">
-          Server DB: <strong>{dbDiag.backend}</strong>
+          Server DB: <strong>{dbDiag.backend === "postgres" ? "Postgres" : dbDiag.backend === "sqlite" ? "SQLite" : dbDiag.backend}</strong>
           {" · "}price_history rows: <strong>{dbDiag.rows}</strong>
           {" · "}SKUs: <strong>{dbDiag.skus ?? 0}</strong>
         </p>

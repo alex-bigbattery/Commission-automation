@@ -340,7 +340,10 @@ def _ensure_b2b_input(year: int, month: int) -> Path:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "database_backend": "postgres" if using_postgres() else "sqlite",
+    }
 
 
 @app.get("/api/commissions/tree")

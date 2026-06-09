@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiFetch, readJson } from "./lib/api.js";
 import GenerateView from "./components/GenerateView.jsx";
 import AdjustmentsView from "./components/AdjustmentsView.jsx";
 import AuditReviewView from "./components/AuditReviewView.jsx";
@@ -22,10 +23,31 @@ const TABS = [
   { id: "help", label: "Help", subtitle: "User guide & how the flow works", icon: IconInfo },
 ];
 
+function formatDatabaseBackend(backend) {
+  if (backend === "postgres") return "Postgres";
+  if (backend === "sqlite") return "SQLite";
+  return backend || "—";
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("generate");
+  const [databaseBackend, setDatabaseBackend] = useState(null);
   const active = useMemo(() => TABS.find((tab) => tab.id === activeTab) || TABS[0], [activeTab]);
   const { user, signOut } = useAuth();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch("health");
+        const payload = await readJson(res);
+        if (!cancelled) setDatabaseBackend(payload?.database_backend || null);
+      } catch {
+        if (!cancelled) setDatabaseBackend(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="app-shell">
@@ -56,8 +78,8 @@ export default function App() {
         <div className="sidebar-footer">
           <div className="sidebar-status-block">
             <div className="sidebar-status-row">
-              <span className="sidebar-status-label">Mode</span>
-              <span className="sidebar-status-value">SQLite</span>
+              <span className="sidebar-status-label">Database</span>
+              <span className="sidebar-status-value">{formatDatabaseBackend(databaseBackend)}</span>
             </div>
             <div className="sidebar-status-row">
               <span className="sidebar-status-label">Source</span>
