@@ -56,7 +56,7 @@ from src.commission.sqlite_to_workbook import (
     load_tiers_from_template,
 )
 from src.commission.return_clawbacks import generate_expected_clawbacks
-from src.commission.b2c_commission import build_b2c_commission
+from src.commission.b2c_commission import build_b2c_commission, write_b2c_workbook
 from src.db.adjustments import (
     delete_adjustment,
     get_adjustment_map,
@@ -603,6 +603,30 @@ def commission_b2c(year: int = Query(...), month: int = Query(...)) -> dict:
         "pool_commission": result.pool_commission,
         "kpis": result.kpis,
     }
+
+
+@app.get("/api/commission/b2c/download")
+def commission_b2c_download(year: int = Query(...), month: int = Query(...)):
+    """Generate and download the B2C RC-Team commission report as .xlsx."""
+    _validate_period(year, month)
+    if not has_period_data(year, month):
+        raise HTTPException(
+            status_code=400,
+            detail="No hay datos en SQLite para este mes. Sincroniza Zoho primero.",
+        )
+    rlp = load_map_from_template(MASTER_TEMPLATE) if MASTER_TEMPLATE.exists() else {}
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output = OUTPUT_DIR / f"{year}-{month}_Commission B2C.xlsx"
+    try:
+        result = build_b2c_commission(year, month, rlp_map=rlp)
+        write_b2c_workbook(result, output, year=year, month=month)
+    except Exception as exc:  # noqa: BLE001 - surface any generation error to the UI
+        raise HTTPException(status_code=500, detail=f"Error generando el libro B2C: {exc}") from exc
+    return FileResponse(
+        path=output,
+        filename=output.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.get("/api/commission/clawbacks")

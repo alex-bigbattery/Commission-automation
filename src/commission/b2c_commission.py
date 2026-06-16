@@ -184,3 +184,129 @@ def build_b2c_commission(
         rate=rate,
         kpis=kpis,
     )
+
+
+# --- Excel export ------------------------------------------------------------
+
+# (engine row key, sheet header, number format) for the B2C_Commission detail.
+_DETAIL_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("order_date",       "Order Date",          ""),
+    ("salesperson",      "Sales person",        ""),
+    ("sales_order",      "Sales Order Number",  ""),
+    ("invoice_date",     "Invoice Date",        ""),
+    ("invoice_number",   "Invoice Number",      ""),
+    ("invoice_status",   "Invoice Status",      ""),
+    ("customer",         "Customer Name",       ""),
+    ("sku",              "SKU",                 ""),
+    ("quantity",         "Quantity",            "#,##0.00"),
+    ("item_total",       "Item Total",          "#,##0.00"),
+    ("map_price",        "Map Price",           "#,##0.00"),
+    ("total_map_price",  "Total Map Price",     "#,##0.00"),
+    ("discount_rate",    "Discount Rate",       "0.00%"),
+    ("commission_rate",  "Commission Rate",     "0.00%"),
+    ("commission_amount","Commission Amount",   "#,##0.00"),
+    ("return_status",    "Return Status",       ""),
+    ("flags",            "Flags",               ""),
+)
+
+
+def write_b2c_workbook(
+    result: B2CResult,
+    output_path: Path,
+    *,
+    year: int,
+    month: int,
+) -> Path:
+    """Write the B2C RC-Team commission report to an .xlsx (Summary + detail).
+
+    Mirrors the accountant's ``…_Commissions_B2C.xlsx`` layout: a Summary sheet
+    with the pool and per-rep subtotals (the RC member split is left blank for
+    manual entry, since it changes monthly), and a B2C_Commission detail sheet.
+    """
+    import calendar
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    bold = Font(bold=True)
+    title_font = Font(bold=True, size=14)
+    header_fill = PatternFill("solid", fgColor="DDDDDD")
+    money = "#,##0.00"
+
+    wb = Workbook()
+
+    # ---- Summary sheet ----
+    ws = wb.active
+    ws.title = "Summary"
+    ws["B2"] = f"B2C RC Team - Commission {calendar.month_name[month]} {year}"
+    ws["B2"].font = title_font
+
+    ws["B4"] = "Pool"
+    ws["B4"].font = bold
+    pool_rows = [
+        ("Commissionable Amount", result.pool_commissionable, money),
+        ("Commission Rate", result.rate, "0.00%"),
+        ("Commission Amount (pool)", result.pool_commission, money),
+    ]
+    r = 5
+    for label, value, fmt in pool_rows:
+        ws.cell(r, 2, label)
+        c = ws.cell(r, 3, value)
+        c.number_format = fmt
+        r += 1
+
+    r += 1
+    ws.cell(r, 2, "Per salesperson (informational)").font = bold
+    r += 1
+    ws.cell(r, 2, "Salesperson").font = bold
+    ws.cell(r, 3, "Commission").font = bold
+    r += 1
+    for sp, amount in result.by_salesperson.items():
+        ws.cell(r, 2, sp)
+        ws.cell(r, 3, amount).number_format = money
+        r += 1
+
+    r += 1
+    note = ws.cell(
+        r, 2,
+        "NOTE: the split of the pool between RC Team members changes each month "
+        "and is entered manually by Accounting — it is not auto-calculated here.",
+    )
+    note.font = Font(italic=True)
+    ws.column_dimensions["B"].width = 32
+    ws.column_dimensions["C"].width = 22
+
+    # ---- B2C_Commission detail sheet ----
+    ws2 = wb.create_sheet("B2C_Commission")
+    for ci, (_key, header, _fmt) in enumerate(_DETAIL_COLUMNS, start=1):
+        cell = ws2.cell(1, ci, header)
+        cell.font = bold
+        cell.fill = header_fill
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    for ri, row in enumerate(result.rows, start=2):
+        for ci, (key, _header, fmt) in enumerate(_DETAIL_COLUMNS, start=1):
+            cell = ws2.cell(ri, ci, row.get(key))
+            if fmt:
+                cell.number_format = fmt
+
+    # Total row at the bottom (Item Total + Commission Amount).
+    total_row = len(result.rows) + 2
+    item_col = next(i for i, (k, _h, _f) in enumerate(_DETAIL_COLUMNS, 1) if k == "item_total")
+    comm_col = next(i for i, (k, _h, _f) in enumerate(_DETAIL_COLUMNS, 1) if k == "commission_amount")
+    ws2.cell(total_row, item_col - 1, "TOTAL").font = bold
+    tc = ws2.cell(total_row, item_col, round(result.pool_commissionable, 2))
+    tc.font = bold
+    tc.number_format = money
+    cc = ws2.cell(total_row, comm_col, round(result.pool_commission, 2))
+    cc.font = bold
+    cc.number_format = money
+
+    # Reasonable column widths.
+    for ci, (_key, header, _fmt) in enumerate(_DETAIL_COLUMNS, start=1):
+        from openpyxl.utils import get_column_letter
+        ws2.column_dimensions[get_column_letter(ci)].width = max(12, min(len(header) + 2, 24))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+    return output_path

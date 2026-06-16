@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from src.commission.b2c_commission import build_b2c_commission
+from src.commission.b2c_commission import build_b2c_commission, write_b2c_workbook
 from src.db.connection import get_connection, init_database
 
 
@@ -176,3 +176,29 @@ def test_custom_rate_override(tmp_path):
     result = build_b2c_commission(YEAR, MONTH, db_path=db_path, rate=0.03)
     assert result.rate == 0.03
     assert result.pool_commission == pytest.approx(3.0)
+
+
+def test_write_b2c_workbook(tmp_path):
+    import openpyxl
+
+    db_path = tmp_path / "wb.sqlite"
+    _seed(db_path, [
+        dict(salesperson="Customer Service", sales_team="B2C Web - RC Team",
+             sku="A", qty=1, rate=1000.0, item_total=1000.0),
+        dict(salesperson="Dylan Nava", sales_team="B2C - RC Team",
+             sku="B", qty=1, rate=500.0, item_total=500.0),
+    ])
+    result = build_b2c_commission(YEAR, MONTH, db_path=db_path)
+
+    out = tmp_path / "b2c_report.xlsx"
+    write_b2c_workbook(result, out, year=YEAR, month=MONTH)
+    assert out.exists()
+
+    wb = openpyxl.load_workbook(out, data_only=True)
+    assert wb.sheetnames == ["Summary", "B2C_Commission"]
+    # Detail sheet has a header + 2 data rows + a TOTAL row.
+    ws = wb["B2C_Commission"]
+    assert ws.max_row >= 4
+    # Pool total appears on the Summary sheet (1500 * 0.02 = 30.00).
+    summary_text = [ws_cell.value for row in wb["Summary"].iter_rows() for ws_cell in row]
+    assert 30.0 in summary_text
