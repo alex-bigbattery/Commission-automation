@@ -55,6 +55,8 @@ from src.commission.sqlite_to_workbook import (
     load_map_from_template,
     load_tiers_from_template,
 )
+from src.commission.return_clawbacks import generate_expected_clawbacks
+from src.commission.b2c_commission import build_b2c_commission, write_b2c_workbook
 from src.db.adjustments import (
     delete_adjustment,
     get_adjustment_map,
@@ -561,6 +563,108 @@ def commission_exceptions(year: int = Query(...), month: int = Query(...)) -> di
     rows = meta.get("exceptions", []) if meta else []
     columns = ["Salesperson", "Invoice", "Sales Order", "SKU", "Amount", "Reason"]
     return {"year": year, "month": month, "columns": columns, "rows": rows, "row_count": len(rows)}
+
+
+@app.get("/api/commission/b2c")
+def commission_b2c(year: int = Query(...), month: int = Query(...)) -> dict:
+    """B2C RC-Team commission for the selected month.
+
+    Eligible lines (``CF.Sales Team`` = ``B2C Web - RC Team`` / ``B2C - RC Team``)
+    earn a flat 2%. Returns line detail, per-rep subtotals, and the pool total.
+    The split of the pool between RC members changes month to month, so it is NOT
+    auto-assigned here — ``split_is_manual`` flags that Accounting books the split.
+    """
+    _validate_period(year, month)
+    if not has_period_data(year, month):
+        raise HTTPException(
+            status_code=400,
+            detail="No hay datos en SQLite para este mes. Sincroniza Zoho primero.",
+        )
+    rlp = load_map_from_template(MASTER_TEMPLATE) if MASTER_TEMPLATE.exists() else {}
+    try:
+        result = build_b2c_commission(year, month, rlp_map=rlp)
+    except Exception as exc:  # noqa: BLE001 - surface any computation error to the UI
+        raise HTTPException(status_code=500, detail=f"Error calculando comisión B2C: {exc}") from exc
+
+    columns = [
+        "Order Date", "Salesperson", "Sales Order", "Invoice Date", "Invoice",
+        "Invoice Status", "Customer", "SKU", "Quantity", "Item Total", "Map Price",
+        "Total Map Price", "Discount Rate", "Commission Rate", "Commission Amount",
+    ]
+    return {
+        "year": year,
+        "month": month,
+        "columns": columns,
+        "rows": result.rows,
+        "row_count": len(result.rows),
+        "rate": result.rate,
+        "by_salesperson": result.by_salesperson,
+        "pool_commissionable": result.pool_commissionable,
+        "pool_commission": result.pool_commission,
+        "kpis": result.kpis,
+    }
+
+
+@app.get("/api/commission/b2c/download")
+def commission_b2c_download(year: int = Query(...), month: int = Query(...)):
+    """Generate and download the B2C RC-Team commission report as .xlsx."""
+    _validate_period(year, month)
+    if not has_period_data(year, month):
+        raise HTTPException(
+            status_code=400,
+            detail="No hay datos en SQLite para este mes. Sincroniza Zoho primero.",
+        )
+    rlp = load_map_from_template(MASTER_TEMPLATE) if MASTER_TEMPLATE.exists() else {}
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output = OUTPUT_DIR / f"{year}-{month}_Commission B2C.xlsx"
+    try:
+        result = build_b2c_commission(year, month, rlp_map=rlp)
+        write_b2c_workbook(result, output, year=year, month=month)
+    except Exception as exc:  # noqa: BLE001 - surface any generation error to the UI
+        raise HTTPException(status_code=500, detail=f"Error generando el libro B2C: {exc}") from exc
+    return FileResponse(
+        path=output,
+        filename=output.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/commission/clawbacks")
+def commission_clawbacks(year: int = Query(...), month: int = Query(...)) -> dict:
+    """Expected return clawbacks for the selected month.
+
+    A line paid in an earlier month under ``RETURN_AFTER_COMMISSION_MONTH`` (the
+    sale shipped/invoiced then, the return came later) is clawed back in the month
+    the RMA lands. This is a READ-ONLY review report — it never applies an
+    adjustment or mutates payouts. Accounting books the negative manually after
+    reviewing it, matching the project's audit/review philosophy.
+
+    ``expected_clawback`` is the negative of the commission originally paid; sum
+    them for the total to deduct this month.
+    """
+    _validate_period(year, month)
+    if not MASTER_TEMPLATE.exists():
+        raise HTTPException(status_code=500, detail=f"Master template not found at {MASTER_TEMPLATE}.")
+    try:
+        clawbacks, returns_in_month = generate_expected_clawbacks(
+            year, month, template_path=MASTER_TEMPLATE
+        )
+    except Exception as exc:  # noqa: BLE001 - surface any computation error to the UI
+        raise HTTPException(status_code=500, detail=f"Error calculando clawbacks: {exc}") from exc
+
+    columns = [
+        "Invoice Month", "Invoice", "Invoice Date", "Sales Order", "SKU", "Rep",
+        "Return Date", "RMA", "Original Commission", "Expected Clawback",
+    ]
+    return {
+        "year": year,
+        "month": month,
+        "columns": columns,
+        "rows": clawbacks,
+        "row_count": len(clawbacks),
+        "total_expected_clawback": round(sum(c["expected_clawback"] for c in clawbacks), 2),
+        "returns_in_month_count": len(returns_in_month),
+    }
 
 
 # --- Accounting Adjustments layer -------------------------------------------

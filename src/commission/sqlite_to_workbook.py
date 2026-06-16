@@ -50,7 +50,7 @@ from src.commission.roster import (
     is_known_inactive,
     is_b2c_coupon_rep,
 )
-from src.commission.returns import commissionable_quantity
+from src.commission.returns import apply_return_timing_rule, commission_month_end, load_return_metadata_map
 from src.commission.workbook_builder_v2 import (
     Block,
     DetailRow,
@@ -95,6 +95,7 @@ _CATEGORY_TAG_MAP: tuple[tuple[str, str], ...] = (
     ("OTHER_TICKET_REFERENCE",          "ticket_review"),
     ("QUOTE_REFERENCE_IN_TICKET_FIELD", "quote_reference"),
     ("FULLY_RETURNED",          "return"),
+    ("RETURN_AFTER_COMMISSION_MONTH", "return_clawback"),
     ("PARTIALLY_RETURNED",      "return"),
     ("KNOWN_INACTIVE",          "inactive_unmatched"),
     ("UNASSIGNED",              "inactive_unmatched"),
@@ -411,6 +412,8 @@ class InvoiceLineRecord:
     qty_shipped: float = 0.0
     qty_invoiced: float = 0.0
     qty_returned: float = 0.0
+    return_date: date | None = None
+    rma_number: str = ""
 
 
 def _load_item_map(conn: DbConnection) -> dict[str, float]:
@@ -696,6 +699,9 @@ def _load_invoice_lines_with_context(
     shipment_info = _load_shipment_summary(conn, so_numbers)
     invoice_meta = _load_invoice_meta_map(conn, year, month)
     returns_map = _load_returns_map(conn, {r["salesorder_id"] for r in rows if r["salesorder_id"]})
+    return_meta_map = load_return_metadata_map(
+        conn, {r["salesorder_id"] for r in rows if r["salesorder_id"]}
+    )
 
     records: list[InvoiceLineRecord] = []
     for r in rows:
@@ -711,6 +717,10 @@ def _load_invoice_lines_with_context(
         ship = shipment_info.get(r["salesorder_number"] or "")
         meta = invoice_meta.get(str(r["invoice_id"] or ""), {})
         qtys = returns_map.get((str(r["salesorder_id"]), sku.strip().upper()), {}) if r["salesorder_id"] else {}
+        rmeta = return_meta_map.get((str(r["salesorder_id"]), sku.strip().upper()), {}) if r["salesorder_id"] else {}
+        ret_dt = rmeta.get("return_date")
+        if isinstance(ret_dt, str):
+            ret_dt = parse_date(ret_dt)
         records.append(InvoiceLineRecord(
             invoice_id=str(r["invoice_id"] or ""),
             invoice_number=r["invoice_number"] or "",
@@ -743,6 +753,8 @@ def _load_invoice_lines_with_context(
             qty_shipped=float(qtys.get("shipped", 0.0)),
             qty_invoiced=float(qtys.get("invoiced", 0.0)),
             qty_returned=float(qtys.get("returned", 0.0)),
+            return_date=ret_dt if isinstance(ret_dt, date) else None,
+            rma_number=str(rmeta.get("rma_number") or ""),
         ))
     return records
 
@@ -1136,13 +1148,25 @@ def build_salespeople_from_sqlite(
             continue
 
         if not in_roster and not special:
+            # Tailor the review reason so Accounting sees WHY the line is held,
+            # not a blanket "not in roster" for recognized-but-non-payable names.
+            if "B2C_COUPON_RULE" in flags:
+                reason = (
+                    "B2C / coupon-based rep — verify coupon before any payout "
+                    "(B2C-RC Team = commissionable; B2C-Web Marketing = not). "
+                    "Not paid via standard B2B until classified."
+                )
+            elif "KNOWN_INACTIVE" in flags:
+                reason = "Known inactive / non-B2B salesperson — assign to an active rep or exclude"
+            else:
+                reason = "Salesperson not in commission roster — classify or assign"
             exceptions.append(ReviewItem(
                 salesperson=zoho_sp,
                 invoice_number=rec.invoice_number,
                 sales_order_number=rec.salesorder_number,
                 sku=rec.sku,
                 amount=rec.item_total,
-                reason="Salesperson not in commission roster — classify or assign",
+                reason=reason,
             ))
 
         # Other charges (non-product, non-shipping, non-zero)
@@ -1285,25 +1309,32 @@ def build_salespeople_from_sqlite(
                 reason="Negative balance (credit / over-payment) — verify before payout",
             ))
 
-        # Rule (shared with the audit engine) — commission only on quantity kept.
-        comm_qty, factor, ret_status = commissionable_quantity(
-            rec.qty_invoiced, rec.qty_returned, rec.qty_shipped, rec.quantity
+        # Rule (shared with the audit engine) — commission only on quantity kept,
+        # with commission-month vs return-date timing for fully returned lines.
+        period_end = commission_month_end(year, month)
+        timing = apply_return_timing_rule(
+            invoiced_qty=rec.qty_invoiced,
+            returned_qty=rec.qty_returned,
+            shipped_qty=rec.qty_shipped,
+            fallback_qty=rec.quantity,
+            item_total=rec.item_total,
+            return_date=rec.return_date,
+            commission_month_end=period_end,
         )
-        comm_amount = round(rec.item_total * factor, 2)
-        if ret_status == "Fully Returned":
-            flags.append("FULLY_RETURNED")
-            excluded_auto = True   # returns are non-commissionable (excluded, visible/auditable)
+        comm_qty = timing.comm_qty
+        comm_amount = timing.comm_amount
+        for flag in timing.flags:
+            flags.append(flag)
+        if timing.exclude:
+            excluded_auto = True
+        if timing.review_reason:
             exceptions.append(ReviewItem(
-                salesperson=sys_sheet, invoice_number=rec.invoice_number,
-                sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
-                reason="Fully returned -> non-commissionable (excluded)",
-            ))
-        elif ret_status == "Partially Returned":
-            flags.append("PARTIALLY_RETURNED")
-            exceptions.append(ReviewItem(
-                salesperson=sys_sheet, invoice_number=rec.invoice_number,
-                sales_order_number=rec.salesorder_number, sku=rec.sku, amount=rec.item_total,
-                reason=f"Partial return: {rec.qty_returned:g} returned — commission on {comm_qty:g}",
+                salesperson=sys_sheet,
+                invoice_number=rec.invoice_number,
+                sales_order_number=rec.salesorder_number,
+                sku=rec.sku,
+                amount=rec.item_total,
+                reason=timing.review_reason,
             ))
 
         detail = _build_detail_row(rec, map_price=map_price, comm_rate=rate, ar_status=ar)
@@ -1411,10 +1442,13 @@ def build_salespeople_from_sqlite(
             "qty_returned": ln.rec.qty_returned,
             "qty_commissionable": (round(ln.detail.quantity, 2) if ln.block == "commissionable" else ""),
             "return_status": (
-                "Fully Returned" if "FULLY_RETURNED" in ln.flags
+                "Return After Period" if "RETURN_AFTER_COMMISSION_MONTH" in ln.flags
+                else "Fully Returned" if "FULLY_RETURNED" in ln.flags
                 else "Partially Returned" if "PARTIALLY_RETURNED" in ln.flags
                 else ""
             ),
+            "return_date": ln.rec.return_date.isoformat() if ln.rec.return_date else "",
+            "rma_number": ln.rec.rma_number or "",
             "revenue": round(ln.rec.item_total, 2),
             "block": ln.block,
             "section": ln.section,
@@ -1463,13 +1497,17 @@ def build_salespeople_from_sqlite(
     # adjustment is not yet approved.
     kpis["is_draft"] = bool(pending_lines > 0 or (not shipment_present) or approval_incomplete)
     map_warnings: list[str] = []
-    if accountant_snapshot_count == 0 and rlp_fallback_lines > 0:
-        map_warnings.append(RLP_FALLBACK_NO_FVPRICE_MSG)
+    if accountant_snapshot_count == 0:
+        # Period-agnostic: any month missing its official accountant FV_PRICE
+        # snapshot gets the same notice (no hardcoded month). The stronger
+        # fallback-impact message is added only when R_LP was actually used to
+        # price at least one line — otherwise prices came from price_history
+        # live rows / items.rate and no MAP review is warranted.
         map_warnings.append(
             f"No {accountant_source} rows in price_history for {year:04d}-{month:02d}."
         )
-    if year == 2026 and month == 4 and accountant_snapshot_count == 0:
-        map_warnings.append("accountant_fvprice_2026_04 is missing from price_history.")
+        if rlp_fallback_lines > 0:
+            map_warnings.append(RLP_FALLBACK_NO_FVPRICE_MSG)
     kpis["map_warnings"] = map_warnings
     kpis["rlp_fallback_lines"] = rlp_fallback_lines
     kpis["accountant_fvprice_present"] = accountant_snapshot_count > 0

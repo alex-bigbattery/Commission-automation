@@ -2122,6 +2122,55 @@ button {
   flex-direction: column;
   gap: 1rem;
 }
+.login-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: var(--bb-text);
+  cursor: pointer;
+  user-select: none;
+}
+.login-remember input {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+.login-remember-hint {
+  color: var(--bb-text-muted);
+  font-weight: 400;
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--bb-text-muted);
+  font-weight: 400;
+}
+.input-with-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-with-action .input {
+  flex: 1;
+  padding-right: 4.75rem;
+}
+.input-action {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--bb-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+.input-action:hover {
+  color: var(--bb-text);
+  background: var(--bb-surface-muted, rgba(0, 0, 0, 0.05));
+}
 .btn-block {
   width: 100%;
   justify-content: center;

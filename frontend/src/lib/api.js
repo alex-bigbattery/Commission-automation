@@ -1,4 +1,4 @@
-import { supabase } from "./supabase.js";
+import { authEnabled, getSupabase } from "./supabase.js";
 
 /** Local dev: `/api` (Vite proxy). Production: set VITE_API_BASE_URL to Render host (no /api suffix). */
 function normalizeApiBase(raw) {
@@ -127,11 +127,14 @@ export async function apiFetch(path, options = {}) {
   const url = resolveApiUrl(path);
   const headers = new Headers(options.headers || {});
 
-  if (supabase) {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
+  if (authEnabled) {
+    const client = getSupabase();
+    if (client) {
+      const { data } = await client.auth.getSession();
+      const token = data.session?.access_token;
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
     }
   }
 

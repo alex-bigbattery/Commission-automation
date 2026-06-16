@@ -402,6 +402,8 @@ def issue_found(row: dict[str, Any]) -> str:
         return "Negative balance (credit / over-payment) — verify before payout"
 
     # Returns
+    if "RETURN_AFTER_COMMISSION_MONTH" in flags:
+        return "Returned after commission month — clawback expected in return month"
     if "FULLY_RETURNED" in flags:
         return "Fully returned — not commissionable"
     if "PARTIALLY_RETURNED" in flags:
@@ -491,6 +493,8 @@ def suggested_action(row: dict[str, Any]) -> str:
         return "Confirm payment status — negative balance may indicate a credit note"
 
     # Returns
+    if "RETURN_AFTER_COMMISSION_MONTH" in flags:
+        return "Apply negative clawback in return month when RMA is received"
     if "FULLY_RETURNED" in flags:
         return "Returned — verify $0 commission"
     if "PARTIALLY_RETURNED" in flags:
