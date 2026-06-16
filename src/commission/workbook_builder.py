@@ -1,6 +1,13 @@
 """
 Commission workbook builder.
 
+DEPRECATED / LEGACY. The production pipeline uses ``workbook_builder_v2``
+(``build_master_workbook`` / ``build_salesperson_workbook``), which fills the real
+template — including a fully formula-driven B2B Summary. This module is the original
+from-scratch builder and is retained only for ``scripts/test_workbook_builder.py``.
+Its ``build_b2b_summary_placeholder`` is an intentional stub, NOT unfinished
+production code. Do not extend this for new work; use v2.
+
 Generates the Jennifer-style commission workbook (B2B Summary + one sheet per salesperson)
 from operational data, with dynamic row counts per block.
 
@@ -581,7 +588,8 @@ def build_workbook(
             write_reference_sheet(ws_ref, payload["headers"], payload["rows"])
 
     if include_b2b_summary:
-        # TODO: populate ws_summary with formulas pointing to sheet_anchors
+        # Legacy builder: a minimal summary stub by design. The production
+        # formula-driven B2B Summary lives in workbook_builder_v2.
         build_b2b_summary_placeholder(ws_summary, salespeople)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
