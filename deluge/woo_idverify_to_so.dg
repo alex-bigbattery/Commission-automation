@@ -1,0 +1,497 @@
+/* ============================================================
+   ID VERIFICATION -> SALES ORDER COMMENT  (scheduled)  v2.1
+   ------------------------------------------------------------
+   Polls WooCommerce orders, reads Real ID verification status
+   (meta: real_id_check_status / real_id_check_id) and:
+     • posts a comment on the matching Zoho Sales Order (BB#)
+     • updates SO custom fields (Real ID check link + status + verified flag)
+
+   Custom fields to create in Zoho Books (Sales Orders module):
+     1. "Woo Order Link"     — type URL      — api_name cf_woo_order_link
+        (stores Real ID check URL when available; falls back to Woo order admin)
+     2. "ID Verification Status" — Single Line — api_name cf_id_verification_status
+     3. "ID Verified"        — Checkbox      — api_name cf_id_verified
+
+   Status mapping:
+        opened / pending / processing  -> in process
+        completed / manually_approved  -> VERIFIED (+ ID Verified = true)
+        rejected / failed / expired    -> rejected
+
+   SETUP: WOO_CK / WOO_CS pasted ABOVE this block.
+   ============================================================ */
+
+// ----------------------- CONFIG -----------------------
+DRY_RUN      = false;
+WOO_BASE     = "https://bigbattery.com/wp-json/wc/v3";
+REAL_ID_BASE = "https://bigbattery.com/wp-admin/admin.php?page=real-id#/checks/";
+ORG          = "868942267";
+chatUrl      = "";
+MAX_ORDERS   = 100;
+PAGE_START   = 1;
+PAGE_END     = 5;
+LOOKBACK_DAYS = 45;
+MAX_CALLS    = 400;
+MARKER       = "(ID Verification - Real ID)";
+RAW_PREFIX   = "Real ID status (raw): ";
+DATE_AFTER   = "";
+DATE_BEFORE  = "";
+ONLY_ORDERS  = {};
+DOLLAR       = "$";
+
+// SO custom fields (api_name from Zoho Settings > Sales Orders > Custom Fields)
+CF_WOO_LINK_API  = "cf_woo_order_link";
+CF_ID_STATUS_API = "cf_id_verification_status";
+CF_ID_VERIFIED   = "cf_id_verified";
+UPDATE_CF        = true;       // set false to comment-only mode
+
+VERIFIED_RAW = {"completed","manually_approved","approved"};
+
+LABELS = {
+    "opened"            : "Opened - sent to verification (in process)",
+    "delivered"         : "Delivered - sent to customer (in process)",
+    "in_review"         : "In review (in process)",
+    "created"           : "Created - in process",
+    "pending"           : "Pending - in process",
+    "requires_input"    : "Requires input - in process",
+    "processing"        : "Processing - in process",
+    "completed"         : "Completed - VERIFIED",
+    "manually_approved" : "Manually approved - VERIFIED",
+    "manually_rejected" : "Manually rejected - REJECTED",
+    "approved"          : "Approved - VERIFIED",
+    "rejected"          : "REJECTED",
+    "failed"            : "FAILED",
+    "expired"           : "EXPIRED",
+    "abandoned"         : "Abandoned"
+};
+
+if(DATE_AFTER == "" && LOOKBACK_DAYS > 0 && ONLY_ORDERS.size() == 0)
+{
+	DATE_AFTER = zoho.currentdate.addDay(-1 * LOOKBACK_DAYS).toString("yyyy-MM-dd") + "T00:00:00";
+}
+
+apiCalls    = 0;
+posted      = list();
+cfUpdated   = list();
+already     = 0;
+noVerif     = 0;
+unmatched   = list();
+errors      = list();
+skippedVoid = 0;
+stoppedRate = false;
+
+auth = "Basic " + zoho.encryption.base64Encode(WOO_CK + ":" + WOO_CS);
+
+fetched = 0;
+done = false;
+
+for each pg in {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20}
+{
+	if(done)
+	{
+		continue;
+	}
+	if(pg < PAGE_START || pg > PAGE_END)
+	{
+		continue;
+	}
+	if(apiCalls >= MAX_CALLS)
+	{
+		stoppedRate = true;
+		done = true;
+		continue;
+	}
+
+	ordUrl = WOO_BASE + "/orders?per_page=" + MAX_ORDERS + "&page=" + pg + "&orderby=date&order=desc";
+	if(DATE_AFTER != "")
+	{
+		ordUrl = ordUrl + "&after=" + DATE_AFTER;
+	}
+	if(DATE_BEFORE != "")
+	{
+		ordUrl = ordUrl + "&before=" + DATE_BEFORE;
+	}
+	wr = invokeurl
+	[
+		url     : ordUrl
+		type    : GET
+		headers : {"Authorization" : auth}
+	];
+	apiCalls = apiCalls + 1;
+
+	orderList = list();
+	if(wr != null && wr != "" && wr.size() > 0)
+	{
+		orderList = wr;
+		fetched = fetched + wr.size();
+	}
+	else
+	{
+		done = true;
+		continue;
+	}
+
+	for each o in orderList
+	{
+		if(apiCalls >= MAX_CALLS)
+		{
+			stoppedRate = true;
+			done = true;
+			break;
+		}
+
+		onum = ifnull(o.get("number"), "").toString();
+		if(ONLY_ORDERS.size() > 0 && !ONLY_ORDERS.contains(onum))
+		{
+			continue;
+		}
+
+		rStatus = "";
+		rCheck  = "";
+		for each m in ifnull(o.get("meta_data"), list())
+		{
+			mk = ifnull(m.get("key"), "").toString();
+			if(mk == "real_id_check_status")
+			{
+				rStatus = ifnull(m.get("value"), "").toString().trim().toLowerCase();
+			}
+			if(mk == "real_id_check_id")
+			{
+				rCheck = ifnull(m.get("value"), "").toString();
+			}
+		}
+
+		if(rStatus == "")
+		{
+			noVerif = noVerif + 1;
+			continue;
+		}
+
+		label = ifnull(LABELS.get(rStatus), rStatus);
+
+		sp = Map();
+		sp.put("reference_number", onum);
+		sr = zoho.books.getRecords("salesorders", ORG, sp, "zbooknew");
+		apiCalls = apiCalls + 1;
+		sos = ifnull(sr.get("salesorders"), list());
+		if(sos.size() == 0)
+		{
+			sp2 = Map();
+			sp2.put("salesorder_number", onum);
+			sr = zoho.books.getRecords("salesorders", ORG, sp2, "zbooknew");
+			apiCalls = apiCalls + 1;
+			sos = ifnull(sr.get("salesorders"), list());
+		}
+		if(sos.size() == 0)
+		{
+			unmatched.add(onum + " | " + rStatus + " (no SO in Zoho)");
+			continue;
+		}
+
+		soRow   = sos.get(0);
+		soId    = soRow.get("salesorder_id");
+		soNum   = soRow.get("salesorder_number");
+		soZStatus = ifnull(soRow.get("status"), "").toString().trim().toLowerCase();
+		if(soZStatus == "void")
+		{
+			skippedVoid = skippedVoid + 1;
+			continue;
+		}
+
+		bl       = ifnull(o.get("billing"), Map());
+		custName = (ifnull(bl.get("first_name"),"") + " " + ifnull(bl.get("last_name"),"")).trim();
+		oTotal   = ifnull(o.get("total"), "").toString();
+		oDateRaw = ifnull(o.get("date_created"), "").toString();
+		oDate    = oDateRaw;
+		if(oDateRaw.length() >= 10)
+		{
+			oDate = oDateRaw.subString(0, 10);
+		}
+		oStatus = ifnull(o.get("status"), "").toString();
+		oId     = ifnull(o.get("id"), "").toString();
+		wooOrderUrl = "https://bigbattery.com/wp-admin/admin.php?page=wc-orders&action=edit&id=" + oId;
+		linkUrl = wooOrderUrl;
+		if(rCheck != "")
+		{
+			linkUrl = REAL_ID_BASE + rCheck;
+		}
+
+		idVerifiedWant = false;
+		if(VERIFIED_RAW.contains(rStatus))
+		{
+			idVerifiedWant = true;
+		}
+
+		// ---- SO detail (custom fields) + latest comment status ----
+		detResp = invokeurl
+		[
+			url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "?organization_id=" + ORG
+			type       : GET
+			connection : "zbooknew"
+		];
+		apiCalls = apiCalls + 1;
+		cfHash = ifnull(detResp.get("salesorder").get("custom_field_hash"), Map());
+		cfStatusNow = ifnull(cfHash.get(CF_ID_STATUS_API), "").toString().trim();
+		cfLinkNow   = ifnull(cfHash.get(CF_WOO_LINK_API), "").toString().trim();
+		cfVerNow    = ifnull(cfHash.get(CF_ID_VERIFIED), "false").toString().trim().toLowerCase();
+
+		cfVerOk = false;
+		if(idVerifiedWant && (cfVerNow == "true" || cfVerNow == "1"))
+		{
+			cfVerOk = true;
+		}
+		else if(!idVerifiedWant && (cfVerNow == "false" || cfVerNow == "0" || cfVerNow == ""))
+		{
+			cfVerOk = true;
+		}
+		if(UPDATE_CF && cfStatusNow == label && cfLinkNow == linkUrl && cfVerOk)
+		{
+			already = already + 1;
+			continue;
+		}
+
+		cl = invokeurl
+		[
+			url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "/comments?organization_id=" + ORG
+			type       : GET
+			connection : "zbooknew"
+		];
+		apiCalls = apiCalls + 1;
+		lastRawOnSo = "";
+		for each cm in ifnull(cl.get("comments"), list())
+		{
+			desc = ifnull(cm.get("description"), "").toString();
+			if(!desc.contains(MARKER))
+			{
+				continue;
+			}
+			if(desc.contains(RAW_PREFIX))
+			{
+				rawLine = desc;
+				pfxIdx = rawLine.indexOf(RAW_PREFIX);
+				if(pfxIdx >= 0)
+				{
+					afterPfx = rawLine.subString(pfxIdx + RAW_PREFIX.length(), rawLine.length());
+					nlIdx = afterPfx.indexOf("\n");
+					if(nlIdx > 0)
+					{
+						lastRawOnSo = afterPfx.subString(0, nlIdx).trim().toLowerCase();
+					}
+					else
+					{
+						lastRawOnSo = afterPfx.trim().toLowerCase();
+					}
+				}
+			}
+			else
+			{
+				for each  stKey in LABELS.keys()
+				{
+					stLbl = LABELS.get(stKey);
+					if(desc.contains("Status: " + stLbl))
+					{
+						lastRawOnSo = stKey.toString().toLowerCase();
+					}
+				}
+			}
+			break;
+		}
+
+		needsComment = lastRawOnSo != rStatus;
+		needsCf = UPDATE_CF && (cfStatusNow != label || cfLinkNow != linkUrl || !cfVerOk);
+
+		if(!needsComment && !needsCf)
+		{
+			already = already + 1;
+			continue;
+		}
+
+		cmt = MARKER + "\n";
+		cmt = cmt + "Status: " + label + "\n";
+		cmt = cmt + RAW_PREFIX + rStatus + "\n";
+		if(lastRawOnSo != "")
+		{
+			cmt = cmt + "Previous status (raw): " + lastRawOnSo + "\n";
+		}
+		cmt = cmt + "Customer: " + custName + "\n";
+		cmt = cmt + "Order total: " + DOLLAR + oTotal + "\n";
+		cmt = cmt + "Order date: " + oDate + "\n";
+		cmt = cmt + "Woo order status: " + oStatus + "\n";
+		cmt = cmt + "Woo order: " + onum + "\n";
+		cmt = cmt + "Check ID: " + rCheck + "\n";
+		cmt = cmt + "ID check link: see custom field \"Woo Order Link\" on this SO";
+
+		if(DRY_RUN)
+		{
+			updNote = "";
+			if(lastRawOnSo != "")
+			{
+				updNote = " (was " + lastRawOnSo + ")";
+			}
+			if(needsComment)
+			{
+				posted.add("[DRY] " + soNum + " <- " + rStatus + updNote);
+			}
+			if(needsCf)
+			{
+				verStr = "false";
+				if(idVerifiedWant)
+				{
+					verStr = "true";
+				}
+				cfUpdated.add("[DRY] " + soNum + " CF: status=" + label + " verified=" + verStr);
+			}
+		}
+		else
+		{
+			if(needsComment)
+			{
+				cMap = Map();
+				cMap.put("description", cmt);
+				cParams = Map();
+				cParams.put("JSONString", cMap);
+				cr = invokeurl
+				[
+					url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "/comments?organization_id=" + ORG
+					type       : POST
+					parameters : cParams
+					connection : "zbooknew"
+				];
+				apiCalls = apiCalls + 1;
+				if(ifnull(cr.get("code"), -1) == 0)
+				{
+					wasNote = "first comment";
+					if(lastRawOnSo != "")
+					{
+						wasNote = "was " + lastRawOnSo;
+					}
+					posted.add(soNum + " <- " + rStatus + " (" + wasNote + ")");
+				}
+				else
+				{
+					errors.add(onum + " comment failed: " + ifnull(cr.get("message"), ""));
+				}
+			}
+
+			if(needsCf && UPDATE_CF)
+			{
+				cfList = list();
+				cfLink = Map();
+				cfLink.put("api_name", CF_WOO_LINK_API);
+				cfLink.put("value", linkUrl);
+				cfList.add(cfLink);
+				cfStat = Map();
+				cfStat.put("api_name", CF_ID_STATUS_API);
+				cfStat.put("value", label);
+				cfList.add(cfStat);
+				cfVer = Map();
+				cfVer.put("api_name", CF_ID_VERIFIED);
+				cfVer.put("value", idVerifiedWant);
+				cfList.add(cfVer);
+				uMap = Map();
+				uMap.put("custom_fields", cfList);
+				uParams = Map();
+				uParams.put("JSONString", uMap);
+				uR = invokeurl
+				[
+					url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "?organization_id=" + ORG
+					type       : PUT
+					parameters : uParams
+					connection : "zbooknew"
+				];
+				apiCalls = apiCalls + 1;
+				if(ifnull(uR.get("code"), -1) == 0)
+				{
+					verStr = "false";
+					if(idVerifiedWant)
+					{
+						verStr = "true";
+					}
+					cfUpdated.add(soNum + " CF updated: " + label + " | verified=" + verStr);
+				}
+				else
+				{
+					errMsg = ifnull(uR.get("message"), "").toString();
+					if(errMsg.contains("void"))
+					{
+						skippedVoid = skippedVoid + 1;
+					}
+					else
+					{
+						errors.add(onum + " custom fields failed: " + errMsg);
+					}
+				}
+			}
+		}
+	}
+}
+
+mode = "DRY RUN (no changes written)";
+if(!DRY_RUN)
+{
+	mode = "LIVE (comments + custom fields)";
+}
+
+body = "ID VERIFICATION -> SO (v2.1) - " + mode + "\n";
+body = body + "Woo orders scanned: " + fetched + " | Window: after " + DATE_AFTER + " | Pages " + PAGE_START + "-" + PAGE_END + "\n";
+body = body + "Comments posted: " + posted.size() + " | CF updated: " + cfUpdated.size() + " | Already up-to-date: " + already + " | Skipped void SO: " + skippedVoid + " | No verification: " + noVerif + " | Unmatched: " + unmatched.size() + " | Errors: " + errors.size() + "\n";
+body = body + "API calls: " + apiCalls + "/" + MAX_CALLS;
+if(stoppedRate)
+{
+	body = body + "  *** STOPPED EARLY (rate guard) ***";
+}
+body = body + "\n";
+
+if(errors.size() > 0)
+{
+	body = body + "\nERRORS:\n";
+	for each e in errors
+	{
+		body = body + " - " + e + "\n";
+	}
+}
+if(unmatched.size() > 0)
+{
+	body = body + "\nNO SO IN ZOHO (review):\n";
+	for each u in unmatched
+	{
+		body = body + " - " + u + "\n";
+	}
+}
+body = body + "\nCOMMENTS POSTED:\n";
+if(posted.size() == 0)
+{
+	body = body + " (none)\n";
+}
+for each p in posted
+{
+	body = body + " - " + p + "\n";
+}
+body = body + "\nCUSTOM FIELDS UPDATED:\n";
+if(cfUpdated.size() == 0)
+{
+	body = body + " (none)\n";
+}
+for each c in cfUpdated
+{
+	body = body + " - " + c + "\n";
+}
+
+if(chatUrl != "")
+{
+	chatMsg = body;
+	if(chatMsg.length() > 3900)
+	{
+		chatMsg = chatMsg.subString(0, 3900) + "\n...(truncated)";
+	}
+	payload = Map();
+	payload.put("text", chatMsg);
+	invokeurl
+	[
+		url        : chatUrl
+		type       : POST
+		parameters : payload.toString()
+		headers    : {"Content-Type" : "application/json"}
+	];
+}
+
+info body;

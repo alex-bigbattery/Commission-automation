@@ -1,0 +1,395 @@
+/* ============================================================
+   SO SETUP + AUTO-APPROVE  (scheduled — replaces so_setup.dg)
+   ------------------------------------------------------------
+   Two jobs in one pass over recent Sales Orders:
+
+   1. SETUP (all editable SOs — draft or open):
+        • Salesperson: set "Customer Service" if empty
+        • Payment Terms (only when BLANK — never override existing NET 30/45/60):
+            B2C blank (BB##### reference_number) → Prepayment (already paid via Woo)
+            B2B blank (SO-##### / quote) → customer default term; fallback Prepayment
+            NOTE: some businesses order via website on credit — do NOT force
+            Prepayment if terms are already set, even on BB# orders
+
+   2. AUTO-APPROVE (B2C draft SOs only — full SOP checklist):
+        ✓ Payment Verified = true  (set by Stripe/Klarna/PayPal/Affirm reconciler)
+        ✓ Salesperson is set
+        ✓ Orders >= $5,000: ID verification comment with VERIFIED status present
+             (posted by woo_idverify_to_so.dg, marker = "(ID Verification - Real ID)")
+          payment_terms NOT checked — Payment Verified = true already confirms payment
+        → If all pass: POST /status/approved → POST /status/confirmed
+
+   Coverage from BB Orders SOP:
+     Step 5-8  : Payment verified by reconcilers (Payment Verified checkbox)
+     Step 9-11 : Tax handled by woo_to_zoho_order.dg at creation
+     Step 12   : Address set by woo_to_zoho_order.dg at creation
+     Step 13   : Payment Terms ← this function (blank only)
+     Step 15   : Salesperson = Customer Service ← this function
+     Step 16   : Approve + Confirm ← this function (B2C auto, when all checks pass)
+
+   Connections:
+     zbooknew   — zoho.books.* integration tasks (setup writes)
+     zbooksfull — invokeurl reads (SO detail, comments) + action POSTs (approve/confirm)
+   ============================================================ */
+
+// ----------------------- CONFIG -----------------------
+DRY_RUN        = false;
+AUTO_APPROVE   = false;          // master switch: false = setup only, NEVER confirm (orders stay draft for Jennifer)
+ORG            = "868942267";
+correod        = "alex.g@bigbattery.com";
+SO_LIMIT       = 200;           // recent SOs to scan per run (200 = safe margin for daily volume)
+MAX_CALLS      = 500;
+ID_THRESHOLD   = 5000;          // orders >= this need ID verification before approve
+ID_MARKER      = "(ID Verification - Real ID)";
+SALES_NAME     = "Customer Service";
+PREPAY_LABEL   = "Prepayment";
+PREPAY_TERMS   = 0;
+
+apiCalls    = 0;
+setupLog    = list();
+approvedLog = list();
+heldPhone   = list();           // B2C SOs held in draft because phone is missing/placeholder
+skipped     = 0;
+errors      = list();
+stoppedRate = false;
+
+// ----------------------- 1) get Customer Service salesperson_id -----------------------
+csId = "";
+spResp = invokeurl
+[
+    url        : "https://www.zohoapis.com/books/v3/salespersons?organization_id=" + ORG
+    type       : GET
+    connection : "zbooknew"
+];
+apiCalls = apiCalls + 1;
+for each sp in ifnull(spResp.get("data"), list())
+{
+    if(ifnull(sp.get("salesperson_name"), "").toLowerCase() == SALES_NAME.toLowerCase())
+    {
+        csId = ifnull(sp.get("salesperson_id"), "").toString();
+    }
+}
+
+// ----------------------- 2) fetch recent SOs -----------------------
+params = Map();
+params.put("per_page", SO_LIMIT);
+params.put("sort_column", "date");
+params.put("sort_order", "D");
+soResp   = zoho.books.getRecords("salesorders", ORG, params, "zbooknew");
+apiCalls = apiCalls + 1;
+soList   = ifnull(soResp.get("salesorders"), list());
+
+// ----------------------- 3) process each SO -----------------------
+for each soRow in soList
+{
+    if(apiCalls >= MAX_CALLS)
+    {
+        stoppedRate = true;
+        break;
+    }
+
+    soId      = ifnull(soRow.get("salesorder_id"), "").toString();
+    rowStatus = ifnull(soRow.get("status"), "").toString().toLowerCase();
+
+    // only editable statuses
+    if(rowStatus != "draft" && rowStatus != "open")
+    {
+        skipped = skipped + 1;
+        continue;
+    }
+
+    // read full SO detail (list view lacks payment_terms_label + custom_field_hash)
+    detResp = invokeurl
+    [
+        url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "?organization_id=" + ORG
+        type       : GET
+        connection : "zbooksfull"
+    ];
+    apiCalls = apiCalls + 1;
+    so = ifnull(detResp.get("salesorder"), Map());
+    // re-extract soId from canonical detail response (guards against list vs detail inconsistency)
+    detSoId = ifnull(so.get("salesorder_id"), "").toString();
+    if(detSoId != "")
+    {
+        soId = detSoId;
+    }
+
+    soNum    = ifnull(so.get("salesorder_number"), soId).toString();
+    refNum   = ifnull(so.get("reference_number"), "").toString();
+    soTotal  = ifnull(so.get("total"), 0).toDecimal();
+    spIdNow  = ifnull(so.get("salesperson_id"), "").toString();
+    curLabel = ifnull(so.get("payment_terms_label"), "").trim();
+    soStatus = ifnull(so.get("status"), "").toString().toLowerCase();
+    custId   = ifnull(so.get("customer_id"), "").toString();
+    cfHash   = ifnull(so.get("custom_field_hash"), Map());
+    pvValue  = ifnull(cfHash.get("cf_payment_verified"), "false").toString();
+
+    // B2C = reference_number starts with "BB" (set by woo_to_zoho_order.dg)
+    // soNum is always Zoho-format SO-##### and never starts with BB
+    isB2C = refNum.startsWith("BB");
+
+    // ---- compute final salesperson ----
+    finalSp = spIdNow;
+    upd     = Map();
+    changes = list();
+
+    if(spIdNow == "")
+    {
+        if(csId != "")
+        {
+            finalSp = csId;
+            upd.put("salesperson_id", csId);
+            changes.add("Salesperson=Customer Service");
+        }
+        else
+        {
+            errors.add(soNum + ": Customer Service salesperson_id not found");
+        }
+    }
+
+    // ---- compute final payment terms (only when BLANK) ----
+    finalTerm = curLabel;
+
+    if(curLabel == "")
+    {
+        if(isB2C)
+        {
+            // B2C with blank terms → Prepayment (already paid via WooCommerce)
+            finalTerm = PREPAY_LABEL;
+            upd.put("payment_terms", PREPAY_TERMS);
+            upd.put("payment_terms_label", PREPAY_LABEL);
+            changes.add("PaymentTerms=Prepayment (B2C blank)");
+        }
+        else
+        {
+            // B2B with blank terms → use customer default, fallback Prepayment
+            useTerms = PREPAY_TERMS;
+            useLabel = PREPAY_LABEL;
+            src      = "fallback";
+            if(custId != "")
+            {
+                cResp = invokeurl
+                [
+                    url        : "https://www.zohoapis.com/books/v3/contacts/" + custId + "?organization_id=" + ORG
+                    type       : GET
+                    connection : "zbooknew"
+                ];
+                apiCalls = apiCalls + 1;
+                cContact = ifnull(cResp.get("contact"), Map());
+                cLbl     = ifnull(cContact.get("payment_terms_label"), "").trim();
+                if(cLbl != "")
+                {
+                    useTerms = ifnull(cContact.get("payment_terms"), PREPAY_TERMS);
+                    useLabel = cLbl;
+                    src      = "customer default";
+                }
+            }
+            finalTerm = useLabel;
+            upd.put("payment_terms", useTerms);
+            upd.put("payment_terms_label", useLabel);
+            changes.add("PaymentTerms=" + useLabel + " (" + src + ")");
+        }
+    }
+
+    // ---- apply setup update ----
+    if(upd.size() > 0)
+    {
+        if(DRY_RUN)
+        {
+            setupLog.add("[DRY] " + soNum + " -> " + changes.toString());
+            // DRY_RUN cannot simulate write failures — auto-approve proceeds optimistically
+        }
+        else
+        {
+            r     = zoho.books.updateRecord("salesorders", ORG, soId, upd, "zbooknew");
+            apiCalls = apiCalls + 1;
+            rCode = ifnull(r.get("code"), -1).toString();
+            if(rCode == "0")
+            {
+                setupLog.add(soNum + " -> " + changes.toString());
+            }
+            else
+            {
+                errors.add(soNum + " setup failed: " + ifnull(r.get("message"), "code=" + rCode));
+                continue;
+            }
+        }
+    }
+
+    // ---- AUTO-APPROVE: B2C draft SOs only ----
+    // master switch OFF = setup only, leave everything in draft (Jennifer confirms manually)
+    if(!AUTO_APPROVE)
+    {
+        continue;
+    }
+    if(!isB2C || soStatus != "draft")
+    {
+        continue;
+    }
+
+    // condition 1: Payment Verified = true (set by reconciler)
+    pvCheck = pvValue.toLowerCase();
+    if(pvCheck != "true" && pvCheck != "1")
+    {
+        continue;
+    }
+
+    // condition 2: salesperson is set
+    if(finalSp == "")
+    {
+        continue;
+    }
+
+    // condition 3: orders >= $5,000 need ID Verified custom field OR legacy comment with VERIFIED
+    idOk = true;
+    if(soTotal.toDecimal() >= ID_THRESHOLD.toDecimal())
+    {
+        idOk = false;
+        idCf = ifnull(cfHash.get("cf_id_verified"), "false").toString().trim().toLowerCase();
+        if(idCf == "true" || idCf == "1")
+        {
+            idOk = true;
+        }
+        else
+        {
+            clResp = invokeurl
+            [
+                url        : "https://www.zohoapis.com/books/v3/salesorders/" + soId + "/comments?organization_id=" + ORG
+                type       : GET
+                connection : "zbooksfull"
+            ];
+            apiCalls = apiCalls + 1;
+            idFoundVerified = false;
+            for each cm in ifnull(clResp.get("comments"), list())
+            {
+                if(!idFoundVerified)
+                {
+                    desc = ifnull(cm.get("description"), "").toString();
+                    if(desc.contains(ID_MARKER) && desc.contains("VERIFIED"))
+                    {
+                        idOk           = true;
+                        idFoundVerified = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if(!idOk)
+    {
+        continue;
+    }
+
+    // condition 4: must have a REAL phone number — shipping cannot move the order
+    // without one. woo_to_zoho_order sets the placeholder "1111111111" when the
+    // WooCommerce order had no phone. Hold those in draft (do NOT auto-confirm).
+    phoneVal    = ifnull(cfHash.get("cf_phone_number"), "").toString().trim();
+    phoneDigits = phoneVal.replaceAll("[^0-9]", "");
+    if(phoneDigits == "" || phoneDigits == "1111111111" || phoneDigits.length() < 7)
+    {
+        heldPhone.add(soNum + " (" + refNum + ") | $" + soTotal + " | phone='" + phoneVal + "' — held in draft (need phone)");
+        continue;
+    }
+
+    // all conditions passed
+    if(DRY_RUN)
+    {
+        approvedLog.add("[DRY] " + soNum + " (" + refNum + ") | $" + soTotal + " | would Open + Confirm");
+        continue;
+    }
+
+    // Draft → Open (submit)
+    // /status/approved only exists when Zoho Books Approval Workflow is enabled;
+    // without it the correct first transition is /status/open
+    opResp = zoho.books.createRecord("salesorders/" + soId + "/status/open", ORG, Map(), "zbooknew");
+    apiCalls = apiCalls + 1;
+    opCode   = ifnull(opResp.get("code"), -1).toString();
+    if(opCode != "0")
+    {
+        errors.add(soNum + " [id=" + soId + "] open failed: " + ifnull(opResp.get("message"), "code=" + opCode));
+        continue;
+    }
+
+    // Open → Confirmed
+    cnResp = zoho.books.createRecord("salesorders/" + soId + "/status/confirmed", ORG, Map(), "zbooknew");
+    apiCalls = apiCalls + 1;
+    cnCode   = ifnull(cnResp.get("code"), -1).toString();
+    if(cnCode == "0")
+    {
+        approvedLog.add(soNum + " (" + refNum + ") | $" + soTotal + " | Open + Confirmed");
+    }
+    else
+    {
+        errors.add(soNum + " confirm failed: " + ifnull(cnResp.get("message"), "code=" + cnCode));
+    }
+}
+
+// ----------------------- report -----------------------
+mode = "DRY RUN (no changes written)";
+if(!DRY_RUN)
+{
+    mode = "LIVE";
+}
+if(!AUTO_APPROVE)
+{
+    mode = mode + " | AUTO-APPROVE OFF (setup only, orders stay draft)";
+}
+
+body = "SO SETUP + AUTO-APPROVE — " + mode + "\n";
+body = body + "Scanned: " + soList.size() + " | Setup changes: " + setupLog.size() + " | Auto-confirmed: " + approvedLog.size() + " | Held (no phone): " + heldPhone.size() + " | Skipped: " + skipped + " | Errors: " + errors.size() + "\n";
+body = body + "API calls: " + apiCalls + "/" + MAX_CALLS;
+if(stoppedRate)
+{
+    body = body + "  *** STOPPED EARLY (rate guard) ***";
+}
+body = body + "\n";
+
+if(errors.size() > 0)
+{
+    body = body + "\nERRORS:\n";
+    for each e in errors
+    {
+        body = body + " - " + e + "\n";
+    }
+}
+
+body = body + "\nSETUP CHANGES:\n";
+if(setupLog.size() == 0)
+{
+    body = body + " (none)\n";
+}
+for each s in setupLog
+{
+    body = body + " - " + s + "\n";
+}
+
+body = body + "\nHELD IN DRAFT (need phone before shipping):\n";
+if(heldPhone.size() == 0)
+{
+    body = body + " (none)\n";
+}
+for each h in heldPhone
+{
+    body = body + " - " + h + "\n";
+}
+
+body = body + "\nAUTO-CONFIRMED (Open + Confirmed):\n";
+if(approvedLog.size() == 0)
+{
+    body = body + " (none)\n";
+}
+for each a in approvedLog
+{
+    body = body + " - " + a + "\n";
+}
+
+
+sendmail
+[
+    from    : correod
+    to      : correod
+    subject : "SO Setup + Auto-Confirm — " + mode
+    message : body
+];
+
+info body;
