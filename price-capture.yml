@@ -1,0 +1,143 @@
+name: Zoho Item Price Capture
+
+# Runs the forward-looking Zoho item price snapshot 3x daily and on demand.
+#
+# Times are UTC (GitHub Actions cron is always UTC). The three schedules
+# below map to Central time as follows:
+#
+#   UTC 13:00  ->  CDT 08:00  /  CST 07:00
+#   UTC 19:00  ->  CDT 14:00  /  CST 13:00
+#   UTC 01:00  ->  CDT 20:00  /  CST 19:00  (previous local calendar day)
+#
+# Note: GitHub Actions cron is best-effort. Runs can be delayed 5-15 minutes
+# during high-load periods on GitHub. That's acceptable for 3x-daily snapshot.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 08:00 CDT / 07:00 CST
+    - cron: '0 19 * * *'   # 14:00 CDT / 13:00 CST
+    - cron: '0  1 * * *'   # 20:00 CDT / 19:00 CST (prev local day)
+
+  # Manual trigger from the Actions UI. Use for testing / one-off captures.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          - dry-run
+          - verify-latest-run
+      batch_size:
+        description: 'Batch size for --apply (default 50)'
+        required: false
+        default: '50'
+
+# Prevent two capture runs from overlapping (they would still be safe thanks
+# to the (run_id, item_id) unique index + ON CONFLICT DO NOTHING, but there
+# is no reason to spend the compute).
+concurrency:
+  group: price-capture
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Capture Zoho item prices
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # --- Database (Supabase session pooler URI) ---
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # --- Zoho OAuth (Self Client) ---
+      ZOHO_CLIENT_ID:       ${{ secrets.ZOHO_CLIENT_ID }}
+      ZOHO_CLIENT_SECRET:   ${{ secrets.ZOHO_CLIENT_SECRET }}
+      ZOHO_REFRESH_TOKEN:   ${{ secrets.ZOHO_REFRESH_TOKEN }}
+      ZOHO_ORGANIZATION_ID: ${{ secrets.ZOHO_ORGANIZATION_ID }}
+
+      # Optional Zoho region overrides (uncomment if not on US datacenter):
+      # ZOHO_ACCOUNTS_DOMAIN:   ${{ secrets.ZOHO_ACCOUNTS_DOMAIN }}
+      # ZOHO_API_DOMAIN:        ${{ secrets.ZOHO_API_DOMAIN }}
+      # ZOHO_ACCOUNTS_BASE_URL: ${{ secrets.ZOHO_ACCOUNTS_BASE_URL }}
+      # ZOHO_BOOKS_BASE_URL:    ${{ secrets.ZOHO_BOOKS_BASE_URL }}
+
+      # Force UTF-8 stdout so log emoji / non-ASCII don't crash on the runner
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify required secrets are set
+        run: |
+          missing=()
+          [ -z "$DATABASE_URL" ]       && missing+=("DATABASE_URL")
+          [ -z "$ZOHO_CLIENT_ID" ]     && missing+=("ZOHO_CLIENT_ID")
+          [ -z "$ZOHO_CLIENT_SECRET" ] && missing+=("ZOHO_CLIENT_SECRET")
+          [ -z "$ZOHO_REFRESH_TOKEN" ] && missing+=("ZOHO_REFRESH_TOKEN")
+          [ -z "$ZOHO_ORGANIZATION_ID" ] && missing+=("ZOHO_ORGANIZATION_ID")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required GitHub Secrets: ${missing[*]}"
+            echo "Add them under: Repo -> Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+          echo "All required secrets present."
+
+      - name: Run price capture
+        id: capture
+        run: |
+          MODE="${{ github.event.inputs.mode || 'apply' }}"
+          BATCH="${{ github.event.inputs.batch_size || '50' }}"
+
+          case "$MODE" in
+            apply)
+              echo "==> Running --apply --batch-size $BATCH"
+              python scripts/capture_zoho_item_price_snapshot.py --apply --batch-size "$BATCH"
+              ;;
+            dry-run)
+              echo "==> Running --dry-run (no DB writes)"
+              python scripts/capture_zoho_item_price_snapshot.py --dry-run
+              ;;
+            verify-latest-run)
+              echo "==> Running --verify-latest-run (read-only)"
+              python scripts/capture_zoho_item_price_snapshot.py --verify-latest-run
+              ;;
+            *)
+              echo "::error::Unknown mode: $MODE"
+              exit 1
+              ;;
+          esac
+
+      - name: Verify the run completed cleanly
+        if: success() && (github.event_name == 'schedule' || github.event.inputs.mode == 'apply')
+        run: |
+          python scripts/capture_zoho_item_price_snapshot.py --verify-latest-run
+
+      - name: Upload capture logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-capture-logs-${{ github.run_id }}
+          path: |
+            data/logs/price_capture/*.log
+          retention-days: 14
+          if-no-files-found: ignore
